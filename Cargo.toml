@@ -1,0 +1,32 @@
+[package]
+name = "realistic_physics_fight"
+# The version players see on the Fight page and in the game; CHANGELOG.md
+# lists what each one changed.
+version = "0.1.0"
+edition = "2021"
+license-file = "LICENSE"
+publish = false
+
+[[bin]]
+name = "realistic_physics_fight"
+path = "src/main.rs"
+
+# Its own workspace: the engine's site deploy checks the game out inside the
+# engine's folder, where Cargo would otherwise look upward for one.
+[workspace]
+
+[dependencies]
+# The engine: the bodies, their injuries, drawing, and sound, from the
+# engine's own repository at a pinned commit. Move the pin to change the
+# engine the game is built on; the engine is under its own licenses
+# (LICENSE).
+realistic_physics = { git = "https://github.com/AzizjonKasimov/realistic-human-body-deformation-physics", rev = "bcb7ab1193778d767cbeae89bb1319407af21485" }
+# "audio" plays the game's sound through quad-snd.
+macroquad = { version = "0.4", features = ["audio"] }
+
+# The engine patches quad-snd (vendor/quad-snd in its repository: lower
+# latency, smooth volume changes, and a browser audio.js that unlocks on
+# every gesture). A [patch] applies only in the crate being built, so the
+# game repeats it, pointed at the engine's copy at the same commit.
+[patch.crates-io]
+quad-snd = { git = "https://github.com/AzizjonKasimov/realistic-human-body-deformation-physics", rev = "bcb7ab1193778d767cbeae89bb1319407af21485" }
