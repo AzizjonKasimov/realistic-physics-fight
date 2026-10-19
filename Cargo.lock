@@ -365,7 +365,7 @@ checksum = "5a651516ddc9168ebd67b24afd085a718be02f8858fe406591b013d101ce2f40"
 [[package]]
 name = "quad-snd"
 version = "0.2.8"
-source = "git+https://github.com/AzizjonKasimov/realistic-human-body-deformation-physics?rev=bcb7ab1193778d767cbeae89bb1319407af21485#bcb7ab1193778d767cbeae89bb1319407af21485"
+source = "git+https://github.com/AzizjonKasimov/realistic-human-body-deformation-physics?rev=08cc7dd52fba6bec3fbbf31e3aec6070e46515c8#08cc7dd52fba6bec3fbbf31e3aec6070e46515c8"
 dependencies = [
  "audir-sles",
  "audrey",
@@ -429,8 +429,8 @@ dependencies = [
 
 [[package]]
 name = "realistic_physics"
-version = "0.15.0"
-source = "git+https://github.com/AzizjonKasimov/realistic-human-body-deformation-physics?rev=bcb7ab1193778d767cbeae89bb1319407af21485#bcb7ab1193778d767cbeae89bb1319407af21485"
+version = "0.15.1"
+source = "git+https://github.com/AzizjonKasimov/realistic-human-body-deformation-physics?rev=08cc7dd52fba6bec3fbbf31e3aec6070e46515c8#08cc7dd52fba6bec3fbbf31e3aec6070e46515c8"
 dependencies = [
  "libm",
  "macroquad",
@@ -439,7 +439,7 @@ dependencies = [
 
 [[package]]
 name = "realistic_physics_fight"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "macroquad",
  "realistic_physics",

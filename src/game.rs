@@ -269,8 +269,19 @@ mod tests {
         assert!(!game.second_player_plays());
     }
 
+    /// The page shows the newest entry of CHANGELOG.md under this version's
+    /// label, so a bump needs its entry: `## v0.1.1 (2026-10-19)` for 0.1.1,
+    /// `## v0.2 (...)` for 0.2.0, as `tools/build_web.ps1` reads it.
     #[test]
     fn the_version_reads_as_the_page_shows_it() {
-        assert_eq!(version_label(), "v0.1");
+        let label = version_label();
+        let heading = include_str!("../CHANGELOG.md")
+            .lines()
+            .find(|line| line.starts_with("## "))
+            .unwrap_or_default();
+        assert!(
+            heading.starts_with(&format!("## {label} (")),
+            "CHANGELOG.md should start with an entry for {label}, not `{heading}`"
+        );
     }
 }
