@@ -6,6 +6,8 @@
 //! fits between the two rows with the room the camera leaves them
 //! (`camera.rs`).
 
+use std::sync::atomic::{AtomicU32, Ordering};
+
 use macroquad::prelude::*;
 use realistic_physics as rp;
 use rp::draw::{with_alpha, Palette};
@@ -25,6 +27,8 @@ const FIGHT_BUTTON_HEIGHT: [f32; 2] = [62.0, 78.0];
 const FIGHTER_SIDE_MARGIN: f64 = 12.0;
 /// Windows narrower than this get the buttons' short labels.
 const NARROW_WIDTH: f32 = 640.0;
+/// Every size the HUD writes text at.
+const TEXT_SIZES: [f32; 6] = [14.0, 15.0, 16.0, 17.0, 18.0, 34.0];
 
 /// The two lines the fighters are drawn between in a window `height` tall:
 /// under the top row of buttons, and over the fighters' buttons.
@@ -172,6 +176,7 @@ impl Layout {
 /// Draws the fight and everything around it, with the buttons in `held`
 /// drawn pressed.
 pub fn draw(game: &Game, layout: &Layout, held: &[Button]) {
+    cache_letters();
     let palette = Palette::default();
     let view = layout.view(&game.camera);
     let floor_y = rp::draw::ground_on_screen(&game.world, view, layout.height);
@@ -207,6 +212,29 @@ pub fn draw(game: &Game, layout: &Layout, held: &[Button]) {
     }
     if !game.running {
         draw_paused(layout, &palette);
+    }
+}
+
+/// Puts every letter the HUD can write, at every size it writes them, in
+/// the font's atlas before the frame writes any, again whenever the
+/// screen's density changes. Text is measured at its size and drawn at its
+/// size times the density, and a letter new to the atlas can grow it.
+/// Grown in the middle of a frame, macroquad deletes the atlas's texture
+/// under the text the frame already wrote: the browser logs
+/// "glBindTexture called with an already deleted texture" for each, and
+/// that text is lost for the frame (v0.1.2 on a 390x844 phone, where
+/// "engine v0.15.2" brought a new letter).
+fn cache_letters() {
+    static CACHED_AT: AtomicU32 = AtomicU32::new(0);
+    let density = macroquad::miniquad::window::dpi_scale();
+    if CACHED_AT.swap(density.to_bits(), Ordering::Relaxed) == density.to_bits() {
+        return;
+    }
+    let font = get_default_font();
+    let letters: Vec<char> = (' '..='~').collect();
+    for size in TEXT_SIZES {
+        font.populate_font_cache(&letters, size as u16);
+        font.populate_font_cache(&letters, (size * density).ceil() as u16);
     }
 }
 

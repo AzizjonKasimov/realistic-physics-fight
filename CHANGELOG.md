@@ -3,6 +3,11 @@
 Each version of the Fight page, newest first. The page shows the newest
 entry's lines as written.
 
+## v0.1.2 (2026-10-20)
+
+- Punching again and again, or punching from a lean, no longer tears your fighter's wrist, elbow, or lower back.
+- Punches on the other fighter's raised guard no longer tear its elbow or shoulder, and tear its wrist far less often.
+
 ## v0.1.1 (2026-10-19)
 
 - Punches thrown at nearly the same moment no longer crush the fighters' arms: the guards bump and both punches come back.

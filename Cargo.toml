@@ -2,7 +2,7 @@
 name = "realistic_physics_fight"
 # The version players see on the Fight page and in the game; CHANGELOG.md
 # lists what each one changed.
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 license-file = "LICENSE"
 publish = false
@@ -20,7 +20,7 @@ path = "src/main.rs"
 # engine's own repository at a pinned commit. Move the pin to change the
 # engine the game is built on; the engine is under its own licenses
 # (LICENSE).
-realistic_physics = { git = "https://github.com/AzizjonKasimov/realistic-human-body-deformation-physics", rev = "08cc7dd52fba6bec3fbbf31e3aec6070e46515c8" }
+realistic_physics = { git = "https://github.com/AzizjonKasimov/realistic-human-body-deformation-physics", rev = "182b217480776ca0b53d8ed3d0b2090f3eb537b1" }
 # "audio" plays the game's sound through quad-snd.
 macroquad = { version = "0.4", features = ["audio"] }
 
@@ -29,4 +29,4 @@ macroquad = { version = "0.4", features = ["audio"] }
 # every gesture). A [patch] applies only in the crate being built, so the
 # game repeats it, pointed at the engine's copy at the same commit.
 [patch.crates-io]
-quad-snd = { git = "https://github.com/AzizjonKasimov/realistic-human-body-deformation-physics", rev = "08cc7dd52fba6bec3fbbf31e3aec6070e46515c8" }
+quad-snd = { git = "https://github.com/AzizjonKasimov/realistic-human-body-deformation-physics", rev = "182b217480776ca0b53d8ed3d0b2090f3eb537b1" }
