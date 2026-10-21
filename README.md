@@ -46,6 +46,8 @@ cargo test --release
 
 runs the game's tests: the controls, the sparring partner, and whole fights played without a window.
 
+Every text file has Unix line endings (LF), in the repository and in every checkout: `.gitattributes` says so whatever Git for Windows' `core.autocrlf` asks for, and `rustfmt.toml` has `cargo fmt` write them, as in the engine's repository. The engine's `.\tools\line_endings.ps1 -Path <this checkout>` switches a checkout made before them, without changing what git sees in the files.
+
 ### Film the game
 
 `realistic_physics_fight --capture OUT.png` plays a script of the players' moves and saves the screen, for checking how the game looks without anyone at the keys:
