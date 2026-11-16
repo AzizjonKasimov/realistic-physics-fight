@@ -10,8 +10,14 @@
 //!                   them (below), in place of a script
 //! --frames N        steps to play (default: the script's own, plus 60)
 //! --every N         also save the screen every N steps, as OUT-NNNN.png
-//! --seed S          what the sparring partner's decisions follow from
+//! --seed S          what the computer opponent's decisions follow from
 //!                   (default 1)
+//! --level L         the opponent's level: easy, normal (the default), or
+//!                   hard
+//! --rounds N        how many rounds the bout has (default 3)
+//! --round-seconds S how long a round lasts (default 60), and the rest
+//! --break-seconds S between two (default 10): shorter for films of a
+//!                   whole bout
 //! --touch           draw the buttons as on a touch screen
 //! --sandbox         show the Sandbox button, as the browser version does
 //! ```
@@ -43,9 +49,11 @@ use std::process;
 
 use macroquad::prelude::*;
 
+use crate::bout::{Outcome, Rules};
 use crate::controls::{Act, Button, Hold};
 use crate::game::{Game, LEFT, RIGHT};
 use crate::hud::{self, Layout};
+use crate::opponent::Level;
 use crate::page::button_name;
 
 /// A capture asked for on the command line.
@@ -55,6 +63,8 @@ pub struct Request {
     frames: Option<usize>,
     every: Option<usize>,
     seed: u64,
+    level: Level,
+    rules: Rules,
     touch: bool,
     sandbox: bool,
 }
@@ -97,12 +107,39 @@ pub fn request() -> Option<Request> {
                 .unwrap_or_else(|_| fail(&format!("{name} wants a number, not `{text}`")))
         })
     };
+    let level = match value(&args, "--level") {
+        None => Level::Normal,
+        Some(name) => Level::ALL
+            .into_iter()
+            .find(|level| level.name() == name)
+            .unwrap_or_else(|| {
+                fail(&format!(
+                    "--level wants easy, normal, or hard, not `{name}`"
+                ))
+            }),
+    };
+    let seconds = |name: &str, default: f64| {
+        value(&args, name).map_or(default, |text| {
+            text.parse::<f64>()
+                .ok()
+                .filter(|seconds| *seconds > 0.0)
+                .unwrap_or_else(|| fail(&format!("{name} wants seconds, not `{text}`")))
+        })
+    };
+    let defaults = Rules::default();
+    let rules = Rules {
+        rounds: number("--rounds").map_or(defaults.rounds, |rounds| rounds.max(1) as u32),
+        round_seconds: seconds("--round-seconds", defaults.round_seconds),
+        break_seconds: seconds("--break-seconds", defaults.break_seconds),
+    };
     Some(Request {
         path,
         script,
         frames: number("--frames"),
         every: number("--every"),
         seed: number("--seed").unwrap_or(1) as u64,
+        level,
+        rules,
         touch: args.iter().any(|arg| arg == "--touch"),
         sandbox: args.iter().any(|arg| arg == "--sandbox"),
     })
@@ -222,7 +259,12 @@ fn parse_gesture(spec: &str) -> Result<Vec<Step>, String> {
 /// Plays the script and saves the screen.
 pub async fn run(request: Request) {
     warm_glyphs().await;
-    let mut game = Game::new(request.seed);
+    let mut game = Game::with(
+        request.seed,
+        request.level,
+        request.rules,
+        realistic_physics::Materials::default(),
+    );
     let length: usize = request
         .script
         .iter()
@@ -257,26 +299,43 @@ pub async fn run(request: Request) {
             game.second_player_joins();
         }
         // While no second player has taken the right fighter, each step
-        // gives it what the sparring partner holds instead (`Game::step`).
+        // gives it what the computer opponent holds instead (`Game::step`).
         for fighter in [LEFT, RIGHT] {
             for hold in Hold::ALL {
                 game.hold(fighter, hold, holds[fighter][hold.index()]);
             }
         }
-        let ended = game.ending().is_some();
+        let ended = game.outcome().is_some();
         game.step();
-        if let (false, Some((ending, _))) = (ended, game.ending()) {
+        if let (false, Some((outcome, _))) = (ended, game.outcome()) {
             // How the fight ended, for scripts that play one to its end.
-            println!(
-                "step {}: the {} fighter {}",
-                frame + 1,
-                if ending.down == LEFT { "left" } else { "right" },
-                if ending.knocked_out {
-                    "was knocked out"
-                } else {
-                    "fell"
+            let side = |fighter: usize| if fighter == LEFT { "left" } else { "right" };
+            let [left, right] = game.bout.clean();
+            let how = match outcome {
+                Outcome::Down {
+                    down,
+                    knocked_out,
+                    round,
+                } => format!(
+                    "the {} fighter {} in round {round}",
+                    side(down),
+                    if knocked_out {
+                        "was knocked out"
+                    } else {
+                        "fell"
+                    }
+                ),
+                Outcome::Decision {
+                    winner: Some(winner),
+                } => {
+                    format!(
+                        "the {} fighter won on points, {left} to {right}",
+                        side(winner)
+                    )
                 }
-            );
+                Outcome::Decision { winner: None } => format!("a draw on points, {left} each"),
+            };
+            println!("step {}: {how}", frame + 1);
         }
         if let Some(every) = request.every.filter(|&every| every > 0) {
             if (frame + 1) % every == 0 {

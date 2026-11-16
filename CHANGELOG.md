@@ -3,6 +3,13 @@
 Each version of the Fight page, newest first. The page shows the newest
 entry's lines as written.
 
+## v0.3 (2026-11-16)
+
+- A computer opponent fights the right fighter. It sees what you do a moment late, as a person would: it covers up or leans back as you step in, counters when you punch, follows you when you back off, and makes mistakes.
+- Pick Easy, Normal, or Hard on the start card, or with the level button at the top.
+- A fight is three rounds of a minute. A knockout or a fall ends it at once; otherwise the fighter who landed more clean punches wins.
+- Punching opens your guard until the punch is back, for both fighters.
+
 ## v0.2 (2026-11-16)
 
 - The fighters now stand side-on, facing each other, on their own legs, and move like boxers: they step in and back, jab, cross, duck, and lean back.

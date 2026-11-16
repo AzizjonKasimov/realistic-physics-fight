@@ -32,9 +32,21 @@ How many times slower than real the film plays (default 1).
 The step the film starts at (default 0): the script still plays from the
 start, but only frames from this step on go in the film.
 
+.PARAMETER Level
+The computer opponent's level: easy, normal (the default), or hard.
+
+.PARAMETER Rounds
+How many rounds the bout has (the game's 3). -RoundSeconds and -BreakSeconds
+set how long each round lasts and the rest between two (60 and 10): shorter
+rounds film a whole bout, its rests and its decision, in a short film.
+
 .EXAMPLE
 .\tools\film.ps1 -Out output\round.mp4 -Script "wait=40:in1:wait=50:cross1:wait=90" -Seed 3
-A round against the sparring partner as it plays, at 1280x720.
+A round against the computer opponent as it plays, at 1280x720.
+
+.EXAMPLE
+.\tools\film.ps1 -Out output\bout.mp4 -Script "wait=30:in1:wait=60:jab1:wait=900" -Level hard -Rounds 2 -RoundSeconds 10 -BreakSeconds 6
+A whole bout against the hard opponent, in rounds of ten seconds.
 
 .EXAMPLE
 .\tools\film.ps1 -Out output\phone.mp4 -Size 844x390 -Touch -Script "wait=30:in1:wait=60"
@@ -50,6 +62,10 @@ param(
     [double]$Slow = 1.0,
     [int]$From = 0,
     [int]$Frames = 0,
+    [ValidateSet("easy", "normal", "hard")][string]$Level = "normal",
+    [int]$Rounds = 0,
+    [double]$RoundSeconds = 0,
+    [double]$BreakSeconds = 0,
     [switch]$Touch,
     [switch]$Sandbox,
     [switch]$SkipBuild
@@ -76,7 +92,9 @@ if (-not $SkipBuild) {
 $exe = Join-Path $repoRoot "target/release/realistic_physics_fight.exe"
 if (-not (Test-Path -LiteralPath $exe)) { throw "No game at $exe; build it first." }
 
-$film = [IO.Path]::GetFullPath($Out)
+# Against PowerShell's own location: .NET's GetFullPath resolves a relative
+# path against the process's folder, which Set-Location does not move.
+$film = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Out)
 $name = [IO.Path]::GetFileNameWithoutExtension($film)
 $framesDir = Join-Path ([IO.Path]::GetDirectoryName($film)) $name
 New-Item -ItemType Directory -Force -Path $framesDir | Out-Null
@@ -86,6 +104,11 @@ $arguments = @("--capture", (Join-Path $framesDir "$name.png"), "--every", "$Eve
 if ($Script) { $arguments += @("--script", $Script) }
 if ($Gesture) { $arguments += @("--gesture", $Gesture) }
 if ($Frames -gt 0) { $arguments += @("--frames", "$Frames") }
+$arguments += @("--level", $Level)
+$invariant = [Globalization.CultureInfo]::InvariantCulture
+if ($Rounds -gt 0) { $arguments += @("--rounds", "$Rounds") }
+if ($RoundSeconds -gt 0) { $arguments += @("--round-seconds", $RoundSeconds.ToString($invariant)) }
+if ($BreakSeconds -gt 0) { $arguments += @("--break-seconds", $BreakSeconds.ToString($invariant)) }
 if ($Touch) { $arguments += "--touch" }
 if ($Sandbox) { $arguments += "--sandbox" }
 Write-Host "==> Play the script and save every $Every steps"
@@ -104,8 +127,11 @@ $empty = @($shots | Where-Object {
         $head = [byte[]]::new(24)
         $stream = [IO.File]::OpenRead($_.FullName)
         try { [void]$stream.Read($head, 0, 24) } finally { $stream.Dispose() }
-        $w = ($head[16] -shl 24) -bor ($head[17] -shl 16) -bor ($head[18] -shl 8) -bor $head[19]
-        $h = ($head[20] -shl 24) -bor ($head[21] -shl 16) -bor ($head[22] -shl 8) -bor $head[23]
+        # Each byte widened first: PowerShell 7.6 shifts a byte as a byte,
+        # and 1280 read as 0 called every frame empty.
+        $b = [int[]]$head
+        $w = ($b[16] -shl 24) -bor ($b[17] -shl 16) -bor ($b[18] -shl 8) -bor $b[19]
+        $h = ($b[20] -shl 24) -bor ($b[21] -shl 16) -bor ($b[22] -shl 8) -bor $b[23]
         # High-density screens save more pixels than the window's size.
         $w -lt $wide -or $h -lt $tall
     })

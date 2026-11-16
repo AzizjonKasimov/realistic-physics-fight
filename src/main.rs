@@ -1,23 +1,27 @@
 //! Fight: two fighters on the realistic_physics engine, seen from the side
 //! and facing each other, each driven by a player's moves (a jab, a cross,
 //! steps in and back, and, held, a block, a duck, and a lean back), or the
-//! right one by a sparring partner while nobody plays it. The engine does
-//! the bodies, how they move, their injuries, the drawing of them, and
-//! their sound; this game adds the players' controls and the screen around
-//! the fight. The browser version sits on the engine's website, under the
-//! sandbox (`web/index.html`).
+//! right one by a computer opponent while nobody plays it, over three
+//! rounds. The engine does the bodies, how they move, their injuries, the
+//! drawing of them, and their sound; this game adds the players' controls,
+//! the opponent, the rounds, and the screen around the fight. The browser
+//! version sits on the engine's website, under the sandbox
+//! (`web/index.html`).
 
 use macroquad::prelude::*;
 use realistic_physics as rp;
 
+mod bout;
 mod camera;
 #[cfg(not(target_arch = "wasm32"))]
 mod capture;
 mod controls;
 mod game;
 mod hud;
+mod opponent;
 mod page;
-mod sparring;
+#[cfg(test)]
+mod trial;
 
 use controls::{Act, Controls, Hold, Intents};
 use game::{Game, LEFT, RIGHT};
@@ -56,10 +60,10 @@ async fn run() {
         capture::run(request).await;
         return;
     }
-    // A different sparring partner every visit: what it does follows from
-    // the moment the game starts.
+    // A different opponent every visit: what it does follows from the moment
+    // the game starts. Its level is the one chosen on the page's start card.
     let seed = (macroquad::miniquad::date::now() * 1000.0) as u64;
-    let mut game = Game::new(seed);
+    let mut game = Game::new(seed, page::chosen_level());
     let mut controls = Controls::default();
     let mut sound = rp::sound::Player::start();
     let mut shown: Option<Layout> = None;
@@ -94,6 +98,9 @@ fn apply(game: &mut Game, intents: &Intents) {
     if intents.restart {
         game.restart();
     }
+    if intents.level {
+        game.restart_at(game.level().next());
+    }
     if intents.pause {
         game.running = !game.running;
     }
@@ -110,7 +117,7 @@ fn apply(game: &mut Game, intents: &Intents) {
             }
         }
         // While nobody plays the right fighter, each step gives it what the
-        // sparring partner holds instead (`Game::step`).
+        // computer opponent holds instead (`Game::step`).
         for hold in Hold::ALL {
             game.hold(fighter, hold, intents.holds[fighter][hold.index()]);
         }

@@ -86,6 +86,9 @@ pub enum Button {
     Sound,
     /// Back to the sandbox's page, in the browser.
     Sandbox,
+    /// The computer opponent's level: a press starts a fight against the
+    /// next level.
+    Level,
 }
 
 /// The keys for each fighter's pressed moves, in [`Act::ALL`]'s order, the
@@ -120,6 +123,8 @@ pub struct Intents {
     pub restart: bool,
     pub mute: bool,
     pub sandbox: bool,
+    /// A fight against the opponent's next level.
+    pub level: bool,
     /// One of the game's own buttons or keys was pressed, which clicks.
     pub clicked: bool,
 }
@@ -212,7 +217,8 @@ pub fn intents_from<P: Fn(KeyCode) -> bool, D: Fn(KeyCode) -> bool>(
     intents.restart = pressed.contains(&Button::Restart) || (keys.pressed)(KeyCode::R);
     intents.mute = pressed.contains(&Button::Sound) || (keys.pressed)(KeyCode::M);
     intents.sandbox = pressed.contains(&Button::Sandbox) || (keys.pressed)(KeyCode::Escape);
-    intents.clicked = intents.pause || intents.restart || intents.mute;
+    intents.level = pressed.contains(&Button::Level);
+    intents.clicked = intents.pause || intents.restart || intents.mute || intents.level;
     intents
 }
 

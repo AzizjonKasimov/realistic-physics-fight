@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Realistic Physics: Fight</title>
-<meta name="description" content="Two fighters on a realistic injury simulation: punch, lean back out of a punch's way, and watch skin, muscle and bone respond through real physics. Play alone against a sparring partner or with a friend. Runs in your browser.">
+<meta name="description" content="Two boxers on a realistic injury simulation: step in, jab, cross, block, duck, and lean back against a computer opponent over three rounds, or a friend, and watch skin, muscle and bone respond through real physics. Runs in your browser.">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Realistic Physics: Fight">
-<meta property="og:description" content="Punch, lean back out of a punch's way, and watch skin, muscle and bone respond through real physics. Runs in your browser.">
+<meta property="og:description" content="Box a computer opponent over three rounds and watch skin, muscle and bone respond through real physics. Runs in your browser.">
 <meta name="theme-color" content="#0f0f11">
 <!-- The same app as the sandbox it sits under, and its icons. -->
 <link rel="manifest" href="../manifest.webmanifest">
@@ -90,6 +90,38 @@
     cursor: pointer;
   }
   #start:hover, #start:focus-visible { filter: brightness(1.1); outline: 2px solid var(--text); outline-offset: 2px; }
+  .level {
+    margin: 0 0 14px;
+    padding: 0;
+    border: none;
+  }
+  .level legend {
+    margin: 0 0 6px;
+    padding: 0;
+    color: var(--muted);
+  }
+  .level .choices { display: flex; gap: 6px; }
+  .level label { flex: 1; }
+  .level input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+  }
+  .level span {
+    display: block;
+    padding: 9px 4px;
+    text-align: center;
+    font-weight: 600;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .level input:checked + span {
+    color: var(--text);
+    border-color: var(--accent);
+    background: rgba(255, 188, 66, 0.12);
+  }
+  .level input:focus-visible + span { outline: 2px solid var(--text); outline-offset: 2px; }
   .controls {
     display: grid;
     grid-template-columns: auto 1fr;
@@ -157,21 +189,30 @@
     <!-- tools/build_web.ps1 fills in the game's version, the engine's, and
          what is new, from Cargo.toml, the engine, and CHANGELOG.md. -->
     <h1 id="title">Fight <span class="version"></span></h1>
-    <p class="tagline">Two boxers seen from the side, on a realistic injury simulation: step in, jab, cross, block, duck, and lean back. Every blow hurts skin, muscle and bone through real physics, and a hard one to the jaw can knock a fighter out.</p>
+    <p class="tagline">Two boxers seen from the side, on a realistic injury simulation: step in, jab, cross, block, duck, and lean back against a computer opponent, over three one-minute rounds. Every blow hurts skin, muscle and bone through real physics, and a hard one to the jaw can knock a fighter out.</p>
     <p class="warning"><strong>Content warning:</strong> graphic simulated injury, including blood, torn tissue and broken bones.</p>
+    <fieldset class="level">
+      <legend>Your opponent</legend>
+      <div class="choices">
+        <label><input type="radio" name="level" value="0"><span>Easy</span></label>
+        <label><input type="radio" name="level" value="1" checked><span>Normal</span></label>
+        <label><input type="radio" name="level" value="2"><span>Hard</span></label>
+      </div>
+    </fieldset>
     <button id="start" type="button">Start the fight</button>
     <dl class="controls">
       <dt>D / A</dt><dd>Step in toward the other fighter / step back</dd>
       <dt>W / S</dt><dd>Hold to lean back, so a punch falls short / hold to duck under it</dd>
       <dt>J / K</dt><dd>Jab with your front hand / cross with your back hand</dd>
       <dt>L</dt><dd>Hold to block: your forearms stop punches, which otherwise go between your open hands</dd>
-      <dt>Arrows , . /</dt><dd>A friend plays the right fighter: the arrows step, lean back, and duck; comma, full stop, and slash jab, cross, and block. Left alone, it spars on its own</dd>
+      <dt>Arrows , . /</dt><dd>A friend plays the right fighter: the arrows step, lean back, and duck; comma, full stop, and slash jab, cross, and block. Left alone, the computer opponent fights it</dd>
       <dt>Space / R / M</dt><dd>Pause / start afresh / sound on or off</dd>
+      <dt>Level</dt><dd>The button at the top starts a new fight against the next level of opponent</dd>
       <dt>Touch</dt><dd>Your moves are buttons: steps, lean back, and duck at the bottom left, jab, cross, and block at the bottom right</dd>
     </dl>
     <section class="about" aria-labelledby="about-title">
       <h2 id="about-title">About</h2>
-      <p>A fight ends when a fighter is knocked out, or falls and cannot get up again; R starts the next. Fights decided by their other injuries, a computer opponent, and rounds come next.</p>
+      <p>A fight is three rounds of a minute. A knockout or a fall ends it at once, as nobody gets up yet; otherwise the fighter who landed more clean punches, on the head or the body rather than the arms, wins. Punching opens your guard until the punch is back. The opponent sees what you do a moment late, as a person would, and makes mistakes. R starts the next fight. Fights decided by their other injuries come next.</p>
       <p>Made by <a href="https://azizjonkasimov.github.io/" target="_blank" rel="noopener">Azizjon Kasimov</a> with AI coding agents, on the engine of the <a href="../">Realistic Physics sandbox</a>.</p>
       <ul class="links">
         <li><a href="../">Back to the sandbox</a></li>
@@ -242,9 +283,35 @@
       installPerfOverlay();
     }
 
+    // The opponent's level chosen on this card, remembered on this device:
+    // 0 easy, 1 normal, 2 hard.
+    const levelInputs = Array.from(document.querySelectorAll('input[name="level"]'));
+    let level = 1;
+    try {
+      // Nothing saved reads as null, which Number() would turn into 0, easy.
+      const stored = localStorage.getItem("fight-level");
+      const saved = stored === null ? NaN : Number(stored);
+      if (saved === 0 || saved === 1 || saved === 2) {
+        level = saved;
+      }
+    } catch (error) {
+      // Storage can be blocked; the card then starts at normal.
+    }
+    levelInputs.forEach(function (input) {
+      input.checked = Number(input.value) === level;
+      input.addEventListener("change", function () {
+        level = Number(input.value);
+        try {
+          localStorage.setItem("fight-level", String(level));
+        } catch (error) {
+          // Not remembered; the choice still holds for this fight.
+        }
+      });
+    });
+
     miniquad_add_plugin({
       name: "fight",
-      version: 1,
+      version: 2,
       register_plugin: function (importObject) {
         // The game tells the page what players do, each once, for the
         // site's visit counts. Defined here rather than in analytics.js, so
@@ -261,6 +328,10 @@
         // Where the game's buttons are, for checks that touch them.
         importObject.env.fight_buttons = function (ptr, len) {
           window.__fightButtons = JSON.parse(UTF8ToString(ptr, len));
+        };
+        // The opponent's level chosen on the start card.
+        importObject.env.fight_level = function () {
+          return level;
         };
       }
     });

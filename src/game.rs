@@ -1,29 +1,33 @@
 //! A fight: two fighters on the engine, seen from the side and facing each
 //! other, the left one driven by its player's moves, and the right by a
-//! second player's, or by the sparring partner while nobody plays it. The
-//! moves are the engine's: a jab, a cross, a step in and a step back, and,
-//! held, a block, a duck, and a lean back. A punch goes through the other
-//! fighter's open hands and lands on its head; a held block stops it on the
-//! forearms. Blows hurt the fighters as they hurt bodies in the sandbox, and
-//! a blow that turns the head hard enough knocks a fighter out (the
-//! engine's `knockout.rs`): it goes down and stays down, and the fight is
-//! over, as it is when a fighter falls. A fight is started afresh by hand.
+//! second player's, or by the computer opponent while nobody plays it
+//! (`opponent.rs`). The moves are the engine's: a jab, a cross, a step in
+//! and a step back, and, held, a block, a duck, and a lean back. A punch
+//! goes through the other fighter's open hands and lands on its head; a
+//! held block stops it on the forearms. Blows hurt the fighters as they
+//! hurt bodies in the sandbox, and a blow that turns the head hard enough
+//! knocks a fighter out (the engine's `knockout.rs`): it goes down and
+//! stays down. The fight is a bout of rounds (`bout.rs`): a knockout or a
+//! fall ends it at once, and otherwise more clean punches wins when the
+//! last round ends. Between rounds both fighters go back to their corners.
+//! A fight is started afresh by hand.
 
 use realistic_physics as rp;
 use rp::scenarios::SCENARIO_WIDTH;
 
+use crate::bout::{self, Bell, Bout, Outcome, Rules};
 use crate::camera::Camera;
 use crate::controls::{Act, Hold};
+use crate::opponent::{Itself, Level, Opponent, Sight};
 use crate::page::{self, Moment};
-use crate::sparring::Sparring;
 
 /// The fighter standing on the left, whom a player alone plays.
 pub const LEFT: usize = 0;
-/// The fighter standing on the right, a second player's or the sparring
-/// partner's.
+/// The fighter standing on the right, a second player's or the computer
+/// opponent's.
 pub const RIGHT: usize = 1;
 
-/// How long the right fighter's keys may rest before the sparring partner
+/// How long the right fighter's keys may rest before the computer opponent
 /// takes it back from a second player, in seconds.
 pub const SECOND_PLAYER_IDLE: f64 = 10.0;
 
@@ -42,17 +46,6 @@ pub fn version_label() -> String {
         Some(short) if short.matches('.').count() == 1 => format!("v{short}"),
         _ => format!("v{version}"),
     }
-}
-
-/// How a fight ended.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Ending {
-    /// The fighter that went down.
-    pub down: usize,
-    /// It was knocked out by a blow to its head, rather than falling: a
-    /// fighter shoved past where a step could catch it falls, and neither
-    /// gets up again yet.
-    pub knocked_out: bool,
 }
 
 /// A fight and everything that drives it.
@@ -78,30 +71,36 @@ pub struct Game {
     /// what each fighter was last told to hold.
     holds: [[bool; 3]; 2],
     told: [[bool; 3]; 2],
-    sparring: Sparring,
+    opponent: Opponent,
     /// How long since a second player last pressed the right fighter's
     /// keys, in seconds; none while nobody has.
     second_player: Option<f64>,
-    /// What the next fight's sparring partner's decisions follow from.
+    /// What the next fight's opponent's decisions follow from.
     seed: u64,
-    /// How the fight ended, once a fighter has gone down, and how many
-    /// seconds ago.
-    ending: Option<(Ending, f64)>,
+    /// The rounds, the clean punches, and how the fight ended.
+    pub bout: Bout,
+    /// Where each fighter stood as the fight began, across the world: its
+    /// corner, where it goes back between rounds.
+    corners: [f64; 2],
+    /// The settings the world was built on, for the next fight.
+    materials: rp::Materials,
 }
 
 impl Game {
-    /// Two fighters ready to fight, the sparring partner's decisions
-    /// following from `seed`.
-    pub fn new(seed: u64) -> Game {
-        Game::with_materials(seed, rp::Materials::default())
+    /// Two fighters ready to fight a bout against an opponent of `level`,
+    /// its decisions following from `seed`.
+    pub fn new(seed: u64, level: Level) -> Game {
+        Game::with(seed, level, Rules::default(), rp::Materials::default())
     }
 
-    /// A fight on the engine's settings `materials`, for tests that change
-    /// one, as the engine's own tests lower the knockout limit.
-    fn with_materials(seed: u64, materials: rp::Materials) -> Game {
-        let world = new_fighters(materials);
+    /// A fight of `rules` on the engine's settings `materials`: for tests
+    /// and films with short rounds, and tests that lower the knockout limit
+    /// as the engine's own tests do.
+    pub fn with(seed: u64, level: Level, rules: Rules, materials: rp::Materials) -> Game {
+        let world = new_fighters(materials.clone());
         let mut earlier = rp::MotionSnapshot::default();
         world.capture_motion(&mut earlier);
+        let corners = [LEFT, RIGHT].map(|fighter| world.fighter_stands(fighter).unwrap_or(0.0));
         Game {
             rim: rp::draw::SkinRim::of(&world),
             camera: Camera::default(),
@@ -114,49 +113,41 @@ impl Game {
             acts: [[false; 4]; 2],
             holds: [[false; 3]; 2],
             told: [[false; 3]; 2],
-            sparring: Sparring::new(seed),
+            opponent: Opponent::new(level, seed),
             second_player: None,
             seed,
-            ending: None,
+            bout: Bout::new(rules),
+            corners,
+            materials,
         }
     }
 
-    /// How the fight ended and how many seconds ago, once a fighter has gone
-    /// down.
-    pub fn ending(&self) -> Option<(Ending, f64)> {
-        self.ending
+    /// How the fight ended and how many seconds ago, once it has.
+    pub fn outcome(&self) -> Option<(Outcome, f64)> {
+        self.bout.outcome()
     }
 
-    /// Notes the fight's end on the step a fighter goes down: knocked out
-    /// by a blow, or fallen. Should both go down on one step, the left
-    /// fighter's fall is the one shown.
-    fn note_ending(&mut self, dt: f64) {
-        if let Some((_, since)) = &mut self.ending {
-            *since += dt;
-            return;
-        }
-        let Some(down) = [LEFT, RIGHT]
-            .into_iter()
-            .find(|&fighter| self.world.fighter_fallen(fighter))
-        else {
-            return;
-        };
-        let knocked_out = self.world.knocked_out(down);
-        self.ending = Some((Ending { down, knocked_out }, 0.0));
-        if knocked_out {
-            page::tell(Moment::Knockout);
-        }
+    /// The computer opponent's level.
+    pub fn level(&self) -> Level {
+        self.opponent.level()
     }
 
-    /// The fight afresh: unhurt fighters where they first stood. A second
-    /// player playing keeps playing.
-    pub fn restart(&mut self) {
+    /// The fight afresh: unhurt fighters where they first stood, the first
+    /// round to come, against an opponent of `level`. A second player
+    /// playing keeps playing.
+    pub fn restart_at(&mut self, level: Level) {
         let second_player = self.second_player;
         let muted = self.muted;
-        *self = Game::new(self.seed.wrapping_add(1));
+        let (rules, materials) = (self.bout.rules, self.materials.clone());
+        *self = Game::with(self.seed.wrapping_add(1), level, rules, materials);
         self.second_player = second_player;
         self.muted = muted;
         page::tell(Moment::Restart);
+    }
+
+    /// The fight afresh against an opponent of the same level.
+    pub fn restart(&mut self) {
+        self.restart_at(self.level());
     }
 
     /// `fighter`'s player presses for `act`, made on the next step.
@@ -205,7 +196,7 @@ impl Game {
     }
 
     /// Whether a second player plays the right fighter now, rather than the
-    /// sparring partner.
+    /// computer opponent.
     pub fn second_player_plays(&self) -> bool {
         self.second_player
             .is_some_and(|idle| idle < SECOND_PLAYER_IDLE)
@@ -242,20 +233,73 @@ impl Game {
         }
     }
 
-    /// One simulation step: the players' and the sparring partner's moves,
-    /// then the world moving on, and the camera following it.
+    /// What the computer opponent sees of the fight now: how far apart the
+    /// fighters stand, what the left fighter is doing, and which of its
+    /// punches landed on the right fighter on the last step.
+    fn sight(&self) -> Sight {
+        let landed = self.world.landed_punches();
+        let on_it = |clean: bool| {
+            landed
+                .iter()
+                .any(|punch| punch.on == RIGHT && bout::clean(punch.struck) == clean)
+        };
+        Sight {
+            apart: self.apart(),
+            them: self.world.fighter_doing(LEFT).unwrap_or_default(),
+            hit: on_it(true),
+            blocked: on_it(false),
+        }
+    }
+
+    /// Between rounds both fighters go back to their corners, a step at a
+    /// time, and stand there with their guards let go of; nobody's moves
+    /// count.
+    fn walk_to_corners(&mut self) {
+        for fighter in [LEFT, RIGHT] {
+            self.acts[fighter] = [false; 4];
+            self.holds[fighter] = [false; 3];
+            let (Some(stands), Some(doing)) = (
+                self.world.fighter_stands(fighter),
+                self.world.fighter_doing(fighter),
+            ) else {
+                continue;
+            };
+            if doing.step.is_some() || doing.lean > 0.2 || doing.duck > 0.2 {
+                continue;
+            }
+            let height = rp::world_frame().height;
+            let middle = SCENARIO_WIDTH * 0.5;
+            // How far nearer the ring's middle than its corner it stands.
+            let ahead = ((self.corners[fighter] - middle).abs() - (stands - middle).abs()) / height;
+            if ahead > 0.5 * STEP {
+                self.acts[fighter][Act::StepOut.index()] = true;
+            } else if ahead < -0.5 * STEP {
+                self.acts[fighter][Act::StepIn.index()] = true;
+            }
+        }
+    }
+
+    /// One simulation step: the players' and the computer opponent's moves,
+    /// then the world moving on, the bout's clock and count, and the camera
+    /// following it.
     pub fn step(&mut self) {
         let dt = self.world.materials().fixed_dt;
         if let Some(idle) = &mut self.second_player {
             *idle += dt;
         }
-        if !self.second_player_plays() {
-            // Once a fighter is down the sparring partner stops, its guard
-            // let go of, and stands in its stance.
-            if self.ending.is_some() {
+        if matches!(self.bout.stage(), bout::Stage::Break(_)) {
+            self.walk_to_corners();
+        } else if !self.second_player_plays() {
+            // Once the fight is over the opponent stops, its guard let go
+            // of, and stands in its stance.
+            if self.bout.outcome().is_some() {
                 self.holds[RIGHT] = [false; 3];
             } else {
-                let wish = self.sparring.tick(dt, self.apart());
+                let me = Itself {
+                    doing: self.world.fighter_doing(RIGHT).unwrap_or_default(),
+                    room_behind: self.room_behind(RIGHT),
+                };
+                let wish = self.opponent.tick(dt, self.sight(), me);
                 self.holds[RIGHT] = wish.holds;
                 if let Some(act) = wish.act {
                     self.acts[RIGHT][act.index()] = true;
@@ -268,8 +312,18 @@ impl Game {
         // fighters stepping in at once share the room between them.
         let mut moves: Vec<(usize, rp::Move)> = Vec::new();
         for fighter in [LEFT, RIGHT] {
+            // A punch opens the guard until it is back, for either fighter:
+            // the forearm that stays up beside a punch otherwise stopped
+            // every answer, and blocking while punching beat every level of
+            // the opponent, which drops its guard to punch.
+            let punching = self.acts[fighter][Act::Jab.index()]
+                || self.acts[fighter][Act::Cross.index()]
+                || self
+                    .world
+                    .fighter_doing(fighter)
+                    .is_some_and(|doing| doing.punch.is_some());
             for hold in Hold::ALL {
-                let held = self.holds[fighter][hold.index()];
+                let held = self.holds[fighter][hold.index()] && !(hold == Hold::Block && punching);
                 if held != self.told[fighter][hold.index()] {
                     self.told[fighter][hold.index()] = held;
                     let made = match hold {
@@ -313,7 +367,31 @@ impl Game {
         self.world.step(dt, &input, SCENARIO_WIDTH);
         self.rim.refresh(&self.world);
         self.camera.follow(&self.world, dt);
-        self.note_ending(dt);
+        // Should both go down on one step, the left fighter's fall is the
+        // one that counts.
+        let down = [LEFT, RIGHT]
+            .into_iter()
+            .find(|&fighter| self.world.fighter_fallen(fighter))
+            .map(|fighter| (fighter, self.world.knocked_out(fighter)));
+        let bell = self.bout.tick(dt, self.world.landed_punches(), down);
+        match bell {
+            Some(Bell::BoutOver) => {
+                if matches!(
+                    self.bout.outcome(),
+                    Some((
+                        Outcome::Down {
+                            knocked_out: true,
+                            ..
+                        },
+                        _
+                    ))
+                ) {
+                    page::tell(Moment::Knockout);
+                }
+            }
+            Some(Bell::RoundBegins(_)) => self.opponent.new_round(),
+            Some(Bell::RoundOver(_)) | None => {}
+        }
     }
 
     /// Moves everything to where this frame shows it, between the last two
@@ -350,7 +428,7 @@ mod tests {
     /// A fight between two players, so that the right fighter moves only as
     /// the test says, with the left fighter a step in, in reach.
     fn in_reach() -> Game {
-        let mut game = Game::new(1);
+        let mut game = Game::new(1, Level::Normal);
         game.second_player_joins();
         game.press(LEFT, Act::StepIn);
         steps(&mut game, 30);
@@ -374,7 +452,7 @@ mod tests {
     /// the player has to step in first.
     #[test]
     fn a_punch_from_where_the_fighters_start_falls_short() {
-        let mut game = Game::new(1);
+        let mut game = Game::new(1, Level::Normal);
         game.second_player_joins();
         steps(&mut game, 10);
         game.press(LEFT, Act::Cross);
@@ -406,7 +484,7 @@ mod tests {
     /// nearer the other than fighters stand.
     #[test]
     fn the_ring_and_the_other_fighter_bound_a_fighters_steps() {
-        let mut game = Game::new(1);
+        let mut game = Game::new(1, Level::Normal);
         game.second_player_joins();
         let middle = SCENARIO_WIDTH * 0.5;
         let height = rp::world_frame().height;
@@ -433,11 +511,11 @@ mod tests {
         );
     }
 
-    /// Left alone, the right fighter spars: it comes into reach and lands a
-    /// punch on a player who does nothing.
+    /// Left alone, the right fighter is the computer opponent's: it comes
+    /// into reach and lands a punch on a player who does nothing.
     #[test]
-    fn the_sparring_partner_comes_in_and_punches() {
-        let mut game = Game::new(5);
+    fn the_opponent_comes_in_and_punches() {
+        let mut game = Game::new(5, Level::Normal);
         let started = game.apart();
         let mut nearest = started;
         for _ in 0..12 * 60 {
@@ -449,11 +527,11 @@ mod tests {
         }
         assert!(
             nearest < started - 0.1,
-            "the sparring partner never stepped in from {started:.2} body heights"
+            "the opponent never stepped in from {started:.2} body heights"
         );
         assert!(
             game.world.stats().contusion_events > 0,
-            "the sparring partner landed nothing in twelve seconds"
+            "the opponent landed nothing in twelve seconds"
         );
     }
 
@@ -466,56 +544,67 @@ mod tests {
         materials
     }
 
+    /// A fight against an opponent of `level` whose decisions follow from
+    /// `seed`, with the knockout limit lowered (`easy_knockouts`).
+    fn knockouts_easy(seed: u64) -> Game {
+        Game::with(seed, Level::Normal, Rules::default(), easy_knockouts())
+    }
+
     /// The player's cross knocks out the other fighter, and the fight is
     /// over: the right fighter is down, knocked out, and stays so.
     #[test]
     fn a_knockout_ends_the_fight() {
-        let mut game = Game::with_materials(1, easy_knockouts());
+        let mut game = knockouts_easy(1);
         game.second_player_joins();
         game.press(LEFT, Act::StepIn);
         steps(&mut game, 40);
         game.second_player_joins();
         game.press(LEFT, Act::Cross);
         steps(&mut game, 60);
-        let knocked_out = Ending {
+        let knocked_out = Outcome::Down {
             down: RIGHT,
             knocked_out: true,
+            round: 1,
         };
         assert_eq!(
-            game.ending().map(|(ending, _)| ending),
+            game.outcome().map(|(outcome, _)| outcome),
             Some(knocked_out),
             "the cross did not end the fight"
         );
         game.second_player_joins();
         steps(&mut game, 120);
         assert_eq!(
-            game.ending().map(|(ending, _)| ending),
+            game.outcome().map(|(outcome, _)| outcome),
             Some(knocked_out),
             "the fight's ending changed"
         );
         assert!(game.world.fighter_fallen(RIGHT));
     }
 
-    /// Once the sparring partner has knocked the player out it stops: it
-    /// lets go of whatever it held, takes no more steps, and throws nothing.
+    /// Once the opponent has knocked the player out it stops: it lets go of
+    /// whatever it held, takes no more steps, and throws nothing.
     #[test]
-    fn the_sparring_partner_stops_once_a_fighter_is_down() {
-        let mut game = Game::with_materials(5, easy_knockouts());
+    fn the_opponent_stops_once_a_fighter_is_down() {
+        let mut game = knockouts_easy(5);
         for _ in 0..15 * 60 {
             game.step();
-            if game.ending().is_some() {
+            if game.outcome().is_some() {
                 break;
             }
         }
-        let Some((ending, _)) = game.ending() else {
-            panic!("the sparring partner knocked nobody out in fifteen seconds");
+        let Some((outcome, _)) = game.outcome() else {
+            panic!("the opponent knocked nobody out in fifteen seconds");
         };
-        assert_eq!(
-            ending,
-            Ending {
-                down: LEFT,
-                knocked_out: true
-            }
+        assert!(
+            matches!(
+                outcome,
+                Outcome::Down {
+                    down: LEFT,
+                    knocked_out: true,
+                    ..
+                }
+            ),
+            "{outcome:?}"
         );
         // A step it was in the middle of finishes.
         steps(&mut game, 50);
@@ -537,10 +626,10 @@ mod tests {
     }
 
     /// A second player takes the right fighter by pressing its keys, and
-    /// the sparring partner takes it back once they rest long enough.
+    /// the computer opponent takes it back once they rest long enough.
     #[test]
     fn a_second_player_takes_over_and_hands_back() {
-        let mut game = Game::new(1);
+        let mut game = Game::new(1, Level::Normal);
         assert!(!game.second_player_plays());
         game.hold(RIGHT, Hold::Block, true);
         assert!(game.second_player_plays());

@@ -1,16 +1,18 @@
-//! What the game tells the web page it runs in (`web/index.html`): the things
-//! players do, each once per page load, for the site's visit counts; a press
-//! of the Sandbox button, which goes back to the sandbox; and where its
-//! buttons are, for checks that touch them as a finger does
-//! (`window.__fightButtons`). The page provides all three through its
-//! `fight` gl.js plugin. The desktop game has no page: it counts nothing and
-//! has no sandbox to go back to.
+//! What the game tells the web page it runs in (`web/index.html`), and asks
+//! it: the things players do, each once per page load, for the site's visit
+//! counts; a press of the Sandbox button, which goes back to the sandbox;
+//! where its buttons are, for checks that touch them as a finger does
+//! (`window.__fightButtons`); and the opponent's level the player chose on
+//! the start card. The page provides all four through its `fight` gl.js
+//! plugin. The desktop game has no page: it counts nothing, has no sandbox
+//! to go back to, and starts at the normal level.
 
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use macroquad::math::Rect;
 
 use crate::controls::Button;
+use crate::opponent::Level;
 
 /// Something a player does that the page counts the first time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,6 +84,12 @@ pub fn back_to_sandbox() {
     platform::back();
 }
 
+/// The opponent's level the player chose on the page's start card: normal
+/// where there is no page, or it says none.
+pub fn chosen_level() -> Level {
+    Level::from_index(platform::level()).unwrap_or(Level::Normal)
+}
+
 /// Tells the page where the buttons are, in the page's pixels, by name:
 /// the left fighter's `jab1`, `cross1`, `in1`, `out1`, `block1`, `duck1`,
 /// and `lean1`, then `pause`, `restart`, `sound`, `sandbox`.
@@ -112,6 +120,7 @@ pub fn button_name(button: Button) -> String {
         Button::Restart => "restart".to_string(),
         Button::Sound => "sound".to_string(),
         Button::Sandbox => "sandbox".to_string(),
+        Button::Level => "level".to_string(),
     }
 }
 
@@ -121,6 +130,13 @@ mod platform {
         fn fight_event(name: *const u8, len: usize);
         fn fight_back();
         fn fight_buttons(json: *const u8, len: usize);
+        fn fight_level() -> u32;
+    }
+
+    pub fn level() -> usize {
+        // SAFETY: the page provides this through its `fight` gl.js plugin;
+        // it takes nothing and returns a number.
+        unsafe { fight_level() as usize }
     }
 
     pub fn buttons(json: &str) {
@@ -139,15 +155,20 @@ mod platform {
         unsafe { fight_back() }
     }
 
-    /// gl.js checks the page's `fight` plugin version against this.
+    /// gl.js checks the page's `fight` plugin version against this: 2 since
+    /// the page tells the game the opponent's level.
     #[no_mangle]
     pub extern "C" fn fight_crate_version() -> u32 {
-        1
+        2
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 mod platform {
+    pub fn level() -> usize {
+        1
+    }
+
     pub fn event(_name: &str) {}
 
     pub fn back() {}

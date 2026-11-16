@@ -78,7 +78,7 @@ mod tests {
     /// camera does not move for their stance's sway.
     #[test]
     fn standing_fighters_get_the_room_they_start_with() {
-        let mut game = Game::new(1);
+        let mut game = Game::new(1, crate::opponent::Level::Normal);
         game.second_player_joins();
         for _ in 0..60 {
             game.step();
@@ -97,7 +97,7 @@ mod tests {
     fn a_fighter_at_the_rings_edge_stays_on_a_phone_held_upright() {
         let width = 390.0;
         let layout = Layout::without_buttons(width, 844.0, true);
-        let mut game = Game::new(1);
+        let mut game = Game::new(1, crate::opponent::Level::Normal);
         let mut widest = 0.0_f64;
         for step in 0..480 {
             game.second_player_joins();
