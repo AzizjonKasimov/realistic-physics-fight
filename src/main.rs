@@ -1,9 +1,11 @@
-//! Fight: two fighters on the realistic_physics engine, each driven by a
-//! player's punch and lean back, or the right one by a sparring partner
-//! while nobody plays it. The engine does the bodies, their injuries, the
-//! drawing of them, and their sound; this game adds the players' controls
-//! and the screen around the fight. The browser version sits on the
-//! engine's website, under the sandbox (`web/index.html`).
+//! Fight: two fighters on the realistic_physics engine, seen from the side
+//! and facing each other, each driven by a player's moves (a jab, a cross,
+//! steps in and back, and, held, a block, a duck, and a lean back), or the
+//! right one by a sparring partner while nobody plays it. The engine does
+//! the bodies, how they move, their injuries, the drawing of them, and
+//! their sound; this game adds the players' controls and the screen around
+//! the fight. The browser version sits on the engine's website, under the
+//! sandbox (`web/index.html`).
 
 use macroquad::prelude::*;
 use realistic_physics as rp;
@@ -17,7 +19,7 @@ mod hud;
 mod page;
 mod sparring;
 
-use controls::{Controls, Intents};
+use controls::{Act, Controls, Hold, Intents};
 use game::{Game, LEFT, RIGHT};
 use hud::Layout;
 
@@ -54,8 +56,8 @@ async fn run() {
         capture::run(request).await;
         return;
     }
-    // A different sparring partner every visit: its waits follow from the
-    // moment the game starts.
+    // A different sparring partner every visit: what it does follows from
+    // the moment the game starts.
     let seed = (macroquad::miniquad::date::now() * 1000.0) as u64;
     let mut game = Game::new(seed);
     let mut controls = Controls::default();
@@ -102,9 +104,15 @@ fn apply(game: &mut Game, intents: &Intents) {
         page::back_to_sandbox();
     }
     for fighter in [LEFT, RIGHT] {
-        if intents.punch[fighter] {
-            game.punch(fighter);
+        for act in Act::ALL {
+            if intents.acts[fighter][act.index()] {
+                game.press(fighter, act);
+            }
         }
-        game.hold_lean(fighter, intents.lean[fighter]);
+        // While nobody plays the right fighter, each step gives it what the
+        // sparring partner holds instead (`Game::step`).
+        for hold in Hold::ALL {
+            game.hold(fighter, hold, intents.holds[fighter][hold.index()]);
+        }
     }
 }

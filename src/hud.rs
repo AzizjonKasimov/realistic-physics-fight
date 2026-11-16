@@ -1,42 +1,48 @@
 //! The screen around the fighters: the game's name and version and its few
 //! buttons along the top, a tag over each fighter saying who plays it, and
-//! each fighter's LEAN BACK and PUNCH buttons along the bottom, the left
-//! fighter's at the left and the right fighter's at the right, sized for
-//! fingers. The fighters are drawn by the engine (`rp::draw`), as large as
-//! fits between the two rows with the room the camera leaves them
-//! (`camera.rs`).
+//! the left fighter's moves as buttons along the bottom, sized for fingers
+//! on a touch screen: its steps, its lean back, and its duck at the left,
+//! under a left thumb, and its jab, its cross, and its block at the right,
+//! under a right thumb. A second player's keys are written between them,
+//! and once a fighter is down a card says how the fight ended and who won.
+//! The fighters are drawn by the engine (`rp::draw`), as large as fits
+//! between the two rows with the room the camera leaves them (`camera.rs`).
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use macroquad::prelude::*;
 use realistic_physics as rp;
 use rp::draw::{with_alpha, Palette};
+use rp::scenarios::SCENARIO_WIDTH;
 
 use crate::camera::Camera;
-use crate::controls::Button;
-use crate::game::{version_label, Game, LEFT, RIGHT};
+use crate::controls::{Act, Button, Hold};
+use crate::game::{version_label, Ending, Game, LEFT, RIGHT};
 
 /// Room kept round the edges of the window and between the rows and the
 /// fighters, in screen pixels.
 const MARGIN: f32 = 10.0;
 /// The height of the buttons along the top.
 const CHIP_HEIGHT: f32 = 30.0;
-/// The height of the fighters' buttons, for a mouse and for fingers.
-const FIGHT_BUTTON_HEIGHT: [f32; 2] = [62.0, 78.0];
+/// The height of one row of the fighter's buttons, for a mouse and for
+/// fingers; the buttons stand in two rows.
+const ROW_HEIGHT: [f32; 2] = [50.0, 54.0];
+/// The room between two of the fighter's buttons.
+const BUTTON_GAP: f32 = 6.0;
 /// The least room left beside the fighters at each side of the window.
 const FIGHTER_SIDE_MARGIN: f64 = 12.0;
 /// Windows narrower than this get the buttons' short labels.
-const NARROW_WIDTH: f32 = 640.0;
+const NARROW_WIDTH: f32 = 760.0;
 /// Every size the HUD writes text at.
-const TEXT_SIZES: [f32; 6] = [14.0, 15.0, 16.0, 17.0, 18.0, 34.0];
+const TEXT_SIZES: [f32; 7] = [13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 34.0];
 
 /// The two lines the fighters are drawn between in a window `height` tall:
-/// under the top row of buttons, and over the fighters' buttons.
+/// under the top row of buttons, and over the fighter's buttons.
 fn fighters_between(height: f32, touch: bool) -> (f32, f32) {
-    let tall = FIGHT_BUTTON_HEIGHT[usize::from(touch)];
+    let rows = 2.0 * ROW_HEIGHT[usize::from(touch)] + BUTTON_GAP;
     (
         MARGIN + CHIP_HEIGHT + MARGIN + 34.0,
-        height - MARGIN - tall - MARGIN,
+        height - MARGIN - rows - MARGIN,
     )
 }
 
@@ -74,32 +80,13 @@ impl Layout {
             if !shown {
                 continue;
             }
-            let w = chip_width(&top_label(button, narrow, false, false));
+            let w = chip_width(&top_label(button, narrow, touch, false, false));
             x -= w;
             buttons.push((button, Rect::new(x, MARGIN, w, CHIP_HEIGHT)));
             x -= 6.0;
         }
-        // Along the bottom: each fighter's two at its own side.
-        let tall = FIGHT_BUTTON_HEIGHT[usize::from(touch)];
-        let gap = 8.0;
-        let each = ((width - 2.0 * MARGIN - 3.0 * gap - 24.0) / 4.0).clamp(60.0, 190.0);
         let (top, bottom) = fighters_between(height, touch);
-        let y = bottom + MARGIN;
-        let lefts = [
-            MARGIN,
-            MARGIN + each + gap,
-            width - MARGIN - 2.0 * each - gap,
-            width - MARGIN - each,
-        ];
-        let fighters = [
-            Button::Lean(LEFT),
-            Button::Punch(LEFT),
-            Button::Punch(RIGHT),
-            Button::Lean(RIGHT),
-        ];
-        for (button, left) in fighters.into_iter().zip(lefts) {
-            buttons.push((button, Rect::new(left, y, each, tall)));
-        }
+        buttons.extend(fighter_buttons(width, bottom, touch));
         Layout {
             width,
             height,
@@ -111,8 +98,9 @@ impl Layout {
         }
     }
 
-    /// The layout of a window without its buttons, which need the window
-    /// to measure their labels: for tests of where the fighters stand.
+    /// The layout of a window without the buttons along its top, which need
+    /// the window to measure their labels: for tests of where the fighters
+    /// and their buttons stand.
     #[cfg(test)]
     pub fn without_buttons(width: f32, height: f32, touch: bool) -> Layout {
         let (top, bottom) = fighters_between(height, touch);
@@ -121,7 +109,7 @@ impl Layout {
             height,
             top,
             bottom,
-            buttons: Vec::new(),
+            buttons: fighter_buttons(width, bottom, touch),
             touch,
             narrow: width < NARROW_WIDTH,
         }
@@ -135,31 +123,21 @@ impl Layout {
             .map(|&(button, _)| button)
     }
 
-    /// Where the scenarios' body frame is drawn: the two fighters as large as
-    /// fits between the top row and the fighters' buttons with the room
-    /// `camera` leaves each, standing just above the buttons (on a tall
-    /// phone, near the thumbs, the room left over above them), the world's
-    /// middle at the window's middle unless that would put a fighter's room
-    /// off the screen. With room for the guards alone, as the fighters
-    /// stand, it is the sandbox's fit (`rp::fighters_across`).
+    /// Where the scenarios' body frame is drawn: the fighters as large as
+    /// fits between the top row and the fighter's buttons, with the room
+    /// `camera` leaves them each side of the ring's middle, which is drawn
+    /// at the window's middle, standing just above the buttons.
     pub fn fighters_frame(&self, camera: &Camera) -> rp::BodyFrame {
         let between =
             rp::body_frame_between(self.width as f64, self.top as f64, self.bottom as f64);
         let world = rp::world_frame();
-        let [left, right] = rp::fighter_frames();
-        let from = left.origin.x - camera.reach[LEFT] * world.height;
-        let to = right.origin.x + camera.reach[RIGHT] * world.height;
         let width = self.width as f64;
         let room = (width - 2.0 * FIGHTER_SIDE_MARGIN).max(1.0);
-        let scale = (between.height / world.height).min(room / (to - from));
-        // A world position x lands on the screen at x * scale + offset.
-        let middle = (left.origin.x + right.origin.x) * 0.5;
-        let offset = (width * 0.5 - middle * scale)
-            .max(FIGHTER_SIDE_MARGIN - from * scale)
-            .min(width - FIGHTER_SIDE_MARGIN - to * scale);
+        let across = 2.0 * camera.half * world.height;
+        let scale = (between.height / world.height).min(room / across);
         rp::BodyFrame {
             origin: rp::Vec2 {
-                x: offset + world.origin.x * scale,
+                x: width * 0.5 + (world.origin.x - SCENARIO_WIDTH * 0.5) * scale,
                 y: self.bottom as f64 - world.height * scale,
             },
             height: world.height * scale,
@@ -171,6 +149,49 @@ impl Layout {
     pub fn view(&self, camera: &Camera) -> rp::View {
         rp::View::fitting(rp::world_frame(), self.fighters_frame(camera))
     }
+}
+
+/// The left fighter's buttons in a window `width` wide, under the line
+/// `bottom` the fighters stand on: at the left its lean back over its step
+/// back, its duck, and its step in, laid out as W over A S D; at the right
+/// its jab, its cross, and its block, each as tall as both rows.
+fn fighter_buttons(width: f32, bottom: f32, touch: bool) -> Vec<(Button, Rect)> {
+    let tall = ROW_HEIGHT[usize::from(touch)];
+    let each = ((width * 0.5 - MARGIN - 2.0 * BUTTON_GAP - 8.0) / 3.0).clamp(48.0, 118.0);
+    let (upper, lower) = (bottom + MARGIN, bottom + MARGIN + tall + BUTTON_GAP);
+    let from_left = |column: f32| MARGIN + column * (each + BUTTON_GAP);
+    let from_right = |column: f32| width - MARGIN - each - column * (each + BUTTON_GAP);
+    let both_rows = 2.0 * tall + BUTTON_GAP;
+    vec![
+        (
+            Button::Hold(LEFT, Hold::Lean),
+            Rect::new(from_left(1.0), upper, each, tall),
+        ),
+        (
+            Button::Act(LEFT, Act::StepOut),
+            Rect::new(from_left(0.0), lower, each, tall),
+        ),
+        (
+            Button::Hold(LEFT, Hold::Duck),
+            Rect::new(from_left(1.0), lower, each, tall),
+        ),
+        (
+            Button::Act(LEFT, Act::StepIn),
+            Rect::new(from_left(2.0), lower, each, tall),
+        ),
+        (
+            Button::Act(LEFT, Act::Jab),
+            Rect::new(from_right(2.0), upper, each, both_rows),
+        ),
+        (
+            Button::Act(LEFT, Act::Cross),
+            Rect::new(from_right(1.0), upper, each, both_rows),
+        ),
+        (
+            Button::Hold(LEFT, Hold::Block),
+            Rect::new(from_right(0.0), upper, each, both_rows),
+        ),
+    ]
 }
 
 /// Draws the fight and everything around it, with the buttons in `held`
@@ -210,8 +231,90 @@ pub fn draw(game: &Game, layout: &Layout, held: &[Button]) {
     for &(button, rect) in &layout.buttons {
         draw_button(game, layout, button, rect, held.contains(&button), &palette);
     }
+    if !layout.touch {
+        draw_second_players_keys(layout, &palette);
+    }
+    if let Some((ending, since)) = game.ending() {
+        draw_ending(game, layout, ending, since, &palette);
+    }
     if !game.running {
         draw_paused(layout, &palette);
+    }
+}
+
+/// How long the card that ends a fight takes to show, in seconds.
+const ENDING_FADE_SECONDS: f64 = 0.25;
+
+/// The card that ends a fight: KNOCKOUT, or DOWN for a fighter that fell,
+/// who won, and how to fight again. It stands in the room above the
+/// fighters where there is room for it, as on a phone held upright, and
+/// otherwise over the top of the fight, clear of the fighter lying on the
+/// floor.
+fn draw_ending(game: &Game, layout: &Layout, ending: Ending, since: f64, palette: &Palette) {
+    let shown = (since / ENDING_FADE_SECONDS).min(1.0) as f32;
+    let title = if ending.knocked_out {
+        "KNOCKOUT"
+    } else {
+        "DOWN"
+    };
+    let winner = match ending.down {
+        RIGHT => "YOU WIN",
+        _ if game.second_player_plays() => "PLAYER 2 WINS",
+        _ => "THE SPARRING PARTNER WINS",
+    };
+    // Named as the restart button along the top says it.
+    let again = if !layout.touch {
+        "Press R to fight again"
+    } else if layout.narrow {
+        "Tap R to fight again"
+    } else {
+        "Tap restart to fight again"
+    };
+    let lines = [
+        (title, 34.0, palette.tool_accent),
+        (winner, 18.0, palette.hud_text),
+        (again, 15.0, palette.hud_muted),
+    ];
+    let gaps = [0.0, 14.0, 10.0];
+    let widest = lines
+        .iter()
+        .map(|&(text, size, _)| measure_text(text, None, size as u16, 1.0).width)
+        .fold(0.0, f32::max);
+    let (pad_x, pad_y) = (26.0, 16.0);
+    let tall = lines
+        .iter()
+        .zip(gaps)
+        .map(|(&(_, size, _), gap)| size + gap)
+        .sum::<f32>()
+        + 2.0 * pad_y;
+    let wide = widest + 2.0 * pad_x;
+    let above = layout.fighters_frame(&game.camera).origin.y as f32 - layout.top;
+    let y = if above >= tall + 2.0 * MARGIN {
+        layout.top + (above - tall) * 0.5
+    } else {
+        layout.top + MARGIN
+    };
+    let x = (layout.width - wide) * 0.5;
+    draw_rectangle(x, y, wide, tall, with_alpha(palette.hud_back, 0.92 * shown));
+    draw_rectangle_lines(
+        x,
+        y,
+        wide,
+        tall,
+        2.0,
+        with_alpha(palette.tool_accent, shown),
+    );
+    let mut baseline = y + pad_y;
+    for (&(text, size, colour), gap) in lines.iter().zip(gaps) {
+        baseline += gap + size;
+        let measure = measure_text(text, None, size as u16, 1.0);
+        draw_text(
+            text,
+            (layout.width - measure.width) * 0.5,
+            baseline - size * 0.2,
+            size,
+            with_alpha(colour, shown * colour.a),
+        );
     }
 }
 
@@ -263,25 +366,63 @@ fn draw_title(palette: &Palette) {
     );
 }
 
-/// A tag over each fighter's head: who plays it.
+/// The height of the tag over each fighter's head, and the least room
+/// between two tags.
+const TAG_HEIGHT: f32 = 24.0;
+const TAG_GAP: f32 = 6.0;
+
+/// A tag over a fighter's head, where it is drawn.
+struct Tag {
+    text: &'static str,
+    accent: Color,
+    x: f32,
+    y: f32,
+    w: f32,
+}
+
+/// A tag over each fighter's head: who plays it. Over two fighters
+/// standing close, as on a phone where they are drawn small, the two tags
+/// would overlap: each moves aside by half as much as they would.
 fn draw_tags(game: &Game, view: rp::View, palette: &Palette) {
+    let size = 16.0;
+    let mut tags: Vec<Tag> = Vec::new();
     for fighter in [LEFT, RIGHT] {
         let Some(top) = head_top(&game.world, fighter) else {
             continue;
         };
         let at = view.to_screen(top);
         let (text, accent) = match fighter {
-            LEFT => ("YOU".to_string(), palette.tool_accent),
-            _ if game.second_player_plays() => ("PLAYER 2".to_string(), palette.hud_text),
-            _ => ("SPARRING PARTNER".to_string(), palette.hud_muted),
+            LEFT => ("YOU", palette.tool_accent),
+            _ if game.second_player_plays() => ("PLAYER 2", palette.hud_text),
+            _ => ("SPARRING PARTNER", palette.hud_muted),
         };
-        let size = 16.0;
-        let measure = measure_text(&text, None, size as u16, 1.0);
-        let (w, h) = (measure.width + 18.0, 24.0);
-        let (x, y) = (at.x as f32 - w * 0.5, at.y as f32 - h - 10.0);
-        draw_rectangle(x, y, w, h, palette.hud_back);
-        draw_rectangle_lines(x, y, w, h, 1.5, accent);
-        draw_text(&text, x + 9.0, y + h * 0.5 + 5.5, size, accent);
+        let w = measure_text(text, None, size as u16, 1.0).width + 18.0;
+        tags.push(Tag {
+            text,
+            accent,
+            x: at.x as f32 - w * 0.5,
+            y: at.y as f32 - TAG_HEIGHT - 10.0,
+            w,
+        });
+    }
+    if let [a, b] = &mut tags[..] {
+        let (first, second) = if a.x <= b.x { (a, b) } else { (b, a) };
+        let overlap = first.x + first.w + TAG_GAP - second.x;
+        if overlap > 0.0 && (first.y - second.y).abs() < TAG_HEIGHT + TAG_GAP {
+            first.x -= overlap * 0.5;
+            second.x += overlap * 0.5;
+        }
+    }
+    for tag in &tags {
+        draw_rectangle(tag.x, tag.y, tag.w, TAG_HEIGHT, palette.hud_back);
+        draw_rectangle_lines(tag.x, tag.y, tag.w, TAG_HEIGHT, 1.5, tag.accent);
+        draw_text(
+            tag.text,
+            tag.x + 9.0,
+            tag.y + TAG_HEIGHT * 0.5 + 5.5,
+            size,
+            tag.accent,
+        );
     }
 }
 
@@ -302,6 +443,24 @@ fn head_top(world: &rp::World, fighter: usize) -> Option<rp::Vec2> {
     })
 }
 
+/// What a fighter's button says: its name, shorter on a narrow window, the
+/// left fighter's key for it, and, for a step, whether it goes toward the
+/// other fighter.
+fn fighter_label(button: Button, narrow: bool) -> (&'static str, &'static str, Option<bool>) {
+    match button {
+        Button::Act(_, Act::Jab) => ("JAB", "J", None),
+        Button::Act(_, Act::Cross) => ("CROSS", "K", None),
+        Button::Act(_, Act::StepIn) => (if narrow { "IN" } else { "STEP IN" }, "D", Some(true)),
+        Button::Act(_, Act::StepOut) => {
+            (if narrow { "BACK" } else { "STEP BACK" }, "A", Some(false))
+        }
+        Button::Hold(_, Hold::Block) => ("BLOCK", "L", None),
+        Button::Hold(_, Hold::Duck) => ("DUCK", "S", None),
+        Button::Hold(_, Hold::Lean) => (if narrow { "LEAN" } else { "LEAN BACK" }, "W", None),
+        _ => ("", "", None),
+    }
+}
+
 fn draw_button(
     game: &Game,
     layout: &Layout,
@@ -310,32 +469,25 @@ fn draw_button(
     held: bool,
     palette: &Palette,
 ) {
-    // A fighter's button: what it does, an arrow toward or away from the
-    // other fighter, and its keys.
-    let (title, toward, keys, accent) = match button {
-        Button::Lean(fighter) => (
-            if layout.narrow { "LEAN" } else { "LEAN BACK" },
-            fighter == RIGHT,
-            if fighter == LEFT { "A or LEFT" } else { "L" },
-            palette.hud_border,
-        ),
-        Button::Punch(fighter) => (
-            "PUNCH",
-            fighter == LEFT,
-            if fighter == LEFT { "D or RIGHT" } else { "J" },
-            palette.blood_fresh,
-        ),
+    let (fighter, accent) = match button {
+        Button::Act(fighter, Act::Jab | Act::Cross) => (fighter, palette.blood_fresh),
+        Button::Hold(fighter, Hold::Block) => (fighter, palette.tool_accent),
+        Button::Act(fighter, _) | Button::Hold(fighter, _) => (fighter, palette.hud_border),
         _ => {
-            let label = top_label(button, layout.narrow, game.muted, !game.running);
-            draw_chip(
-                rect.x,
-                rect.y,
-                rect.w,
-                &label,
-                palette.hud_border,
-                palette,
-                15.0,
+            let label = top_label(
+                button,
+                layout.narrow,
+                layout.touch,
+                game.muted,
+                !game.running,
             );
+            // Once the fight is over, restart is what to press next.
+            let accent = if button == Button::Restart && game.ending().is_some() {
+                palette.tool_accent
+            } else {
+                palette.hud_border
+            };
+            draw_chip(rect.x, rect.y, rect.w, &label, accent, palette, 15.0);
             if held {
                 draw_rectangle(
                     rect.x,
@@ -348,38 +500,102 @@ fn draw_button(
             return;
         }
     };
-    // Held down, a button lights up: a punch red, a lean pale.
-    let fill = match (held, button) {
-        (false, _) => palette.hud_back,
-        (true, Button::Punch(_)) => with_alpha(accent, 0.5),
-        (true, _) => with_alpha(palette.hud_text, 0.28),
+    let (title, key, toward) = fighter_label(button, layout.narrow);
+    // Held down, a button lights up in its own colour.
+    let fill = if held {
+        with_alpha(accent, 0.5)
+    } else {
+        palette.hud_back
     };
     draw_rectangle(rect.x, rect.y, rect.w, rect.h, fill);
     draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 2.5, accent);
-    let size = if layout.narrow { 16.0 } else { 18.0 };
+    let size = if layout.narrow { 14.0 } else { 16.0 };
     let measure = measure_text(title, None, size as u16, 1.0);
-    let arrow = size * 0.55;
-    let gap = 7.0;
+    let arrow = if toward.is_some() { size * 0.55 } else { 0.0 };
+    let gap = if toward.is_some() { 6.0 } else { 0.0 };
     let show_keys = !layout.touch;
-    let middle = rect.y + rect.h * if show_keys { 0.42 } else { 0.5 };
+    let middle = rect.y + (rect.h - if show_keys { 24.0 } else { 0.0 }) * 0.5;
     let width = measure.width + gap + arrow;
     let left = rect.x + (rect.w - width) * 0.5;
-    // The arrow on the side it points to: right for a move toward the right.
-    let (text_x, arrow_x) = if toward {
+    // A step's arrow points the way the fighter goes, on that side of its
+    // name: toward the other fighter is to the right for the left fighter.
+    let right = toward.is_some_and(|toward| toward == (fighter == LEFT));
+    let (text_x, arrow_x) = if right || toward.is_none() {
         (left, left + measure.width + gap)
     } else {
         (left + arrow + gap, left)
     };
     draw_text(title, text_x, middle + size * 0.32, size, palette.hud_text);
-    draw_arrow(arrow_x, middle, arrow, toward, palette.hud_text);
+    if toward.is_some() {
+        draw_arrow(arrow_x, middle, arrow, right, palette.hud_text);
+    }
     if show_keys {
-        let small = 14.0;
-        let measure = measure_text(keys, None, small as u16, 1.0);
+        // The key that makes the move, on a key cap of its own, so a
+        // player at a keyboard reads the keys before the names.
+        let small = 16.0;
+        let measure = measure_text(key, None, small as u16, 1.0);
+        let (cap_w, cap_h) = (measure.width + 14.0, 18.0);
+        let (cap_x, cap_y) = (
+            rect.x + (rect.w - cap_w) * 0.5,
+            rect.y + rect.h - cap_h - 5.0,
+        );
+        draw_rectangle(
+            cap_x,
+            cap_y,
+            cap_w,
+            cap_h,
+            with_alpha(palette.hud_text, 0.12),
+        );
+        draw_rectangle_lines(cap_x, cap_y, cap_w, cap_h, 1.0, palette.hud_muted);
         draw_text(
-            keys,
-            rect.x + (rect.w - measure.width) * 0.5,
-            rect.y + rect.h * 0.8,
+            key,
+            cap_x + 7.0,
+            cap_y + cap_h * 0.5 + small * 0.30,
             small,
+            palette.hud_text,
+        );
+    }
+}
+
+/// The second player's keys, written between the left fighter's two groups
+/// of buttons where there is room: a friend takes the right fighter by
+/// pressing them.
+fn draw_second_players_keys(layout: &Layout, palette: &Palette) {
+    let rect_of = |wanted: Button| {
+        layout
+            .buttons
+            .iter()
+            .find(|(button, _)| *button == wanted)
+            .map(|&(_, rect)| rect)
+    };
+    let (Some(step_in), Some(jab)) = (
+        rect_of(Button::Act(LEFT, Act::StepIn)),
+        rect_of(Button::Act(LEFT, Act::Jab)),
+    ) else {
+        return;
+    };
+    let (from, to) = (step_in.x + step_in.w, jab.x);
+    let lines = [
+        "PLAYER 2 PLAYS THE RIGHT FIGHTER",
+        "ARROWS  step, lean back, duck",
+        ",  jab     .  cross     /  block",
+    ];
+    let size = 13.0;
+    let widest = lines
+        .iter()
+        .map(|line| measure_text(line, None, size as u16, 1.0).width)
+        .fold(0.0, f32::max);
+    if to - from < widest + 24.0 {
+        return;
+    }
+    let top = jab.y + (jab.h - 3.0 * (size + 5.0)) * 0.5;
+    for (row, line) in lines.iter().enumerate() {
+        let measure = measure_text(line, None, size as u16, 1.0);
+        draw_text(
+            line,
+            (from + to - measure.width) * 0.5,
+            top + (row as f32 + 0.8) * (size + 5.0),
+            size,
             palette.hud_muted,
         );
     }
@@ -397,19 +613,27 @@ fn draw_arrow(x: f32, y: f32, size: f32, right: bool, color: Color) {
     );
 }
 
-/// The label of a button along the top: its key and what it does, or on a
-/// narrow window, a short sign. The game's font has no arrows.
-fn top_label(button: Button, narrow: bool, muted: bool, paused: bool) -> String {
-    let (short, long) = match button {
-        Button::Pause if paused => (">", "Space  go on"),
-        Button::Pause => ("II", "Space  pause"),
-        Button::Restart => ("R", "R  restart"),
-        Button::Sound if muted => ("M off", "M  sound off"),
-        Button::Sound => ("M", "M  sound"),
-        Button::Sandbox => ("<", "< Sandbox"),
-        Button::Lean(_) | Button::Punch(_) => ("", ""),
+/// The label of a button along the top: its key and what it does, what it
+/// does alone on a touch screen, which has no keys, or on a narrow window, a
+/// short sign. The game's font has no arrows.
+fn top_label(button: Button, narrow: bool, touch: bool, muted: bool, paused: bool) -> String {
+    let (short, keyed, plain) = match button {
+        Button::Pause if paused => (">", "Space  go on", "go on"),
+        Button::Pause => ("II", "Space  pause", "pause"),
+        Button::Restart => ("R", "R  restart", "restart"),
+        Button::Sound if muted => ("M off", "M  sound off", "sound off"),
+        Button::Sound => ("M", "M  sound", "sound"),
+        Button::Sandbox => ("<", "< Sandbox", "< Sandbox"),
+        Button::Act(..) | Button::Hold(..) => ("", "", ""),
     };
-    if narrow { short } else { long }.to_string()
+    if narrow {
+        short
+    } else if touch {
+        plain
+    } else {
+        keyed
+    }
+    .to_string()
 }
 
 /// How wide a chip is round `label` in 15 px text.
@@ -456,67 +680,84 @@ fn draw_paused(layout: &Layout, palette: &Palette) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::camera::{LEAST_HALF, MOST_HALF};
 
-    /// With room for the guards alone, the fighters are drawn where the
-    /// sandbox would fit them, standing on the buttons, at every size.
+    const WINDOWS: [(f32, f32, bool); 4] = [
+        (1280.0, 720.0, false),
+        (800.0, 600.0, false),
+        (390.0, 844.0, true),
+        (844.0, 390.0, true),
+    ];
+
+    /// The left fighter has a button for each of its seven moves, all on
+    /// the screen under the fighters, none over another, at every size.
     #[test]
-    fn standing_fighters_are_fitted_as_the_sandbox_fits_them() {
-        for (width, height, touch) in [
-            (1280.0, 720.0, false),
-            (800.0, 600.0, false),
-            (390.0, 844.0, true),
-            (844.0, 390.0, true),
-        ] {
+    fn every_move_has_a_button_of_its_own() {
+        for (width, height, touch) in WINDOWS {
             let layout = Layout::without_buttons(width, height, touch);
-            let frame = layout.fighters_frame(&Camera::default());
-            let between =
-                rp::body_frame_between(width as f64, layout.top as f64, layout.bottom as f64);
-            let sandbox = rp::fighters_across(
-                between,
-                rp::FIGHTER_SPACING,
-                width as f64,
-                FIGHTER_SIDE_MARGIN,
-            );
+            let mut wanted: Vec<Button> = Act::ALL
+                .into_iter()
+                .map(|act| Button::Act(LEFT, act))
+                .chain(Hold::ALL.into_iter().map(|hold| Button::Hold(LEFT, hold)))
+                .collect();
+            for (index, &(button, rect)) in layout.buttons.iter().enumerate() {
+                wanted.retain(|&other| other != button);
+                assert!(
+                    rect.x >= 0.0
+                        && rect.right() <= width
+                        && rect.y >= layout.bottom
+                        && rect.bottom() <= height,
+                    "{width}x{height}: {button:?} at {rect:?} is off its place"
+                );
+                for &(other, other_rect) in &layout.buttons[index + 1..] {
+                    assert!(
+                        !rect.overlaps(&other_rect),
+                        "{width}x{height}: {button:?} lies over {other:?}"
+                    );
+                }
+                assert_eq!(layout.button_at(rect.center()), Some(button));
+            }
             assert!(
-                (frame.origin.x - sandbox.origin.x).abs() < 1.0e-9
-                    && (frame.height - sandbox.height).abs() < 1.0e-9,
-                "{width}x{height}: drawn at {frame:?}, the sandbox's fit {sandbox:?}"
+                wanted.is_empty(),
+                "{width}x{height}: no button for {wanted:?}"
             );
-            assert_eq!(frame.origin.y + frame.height, layout.bottom as f64);
         }
     }
 
-    /// On a wide screen there is room for a lean beside the fighters, so the
-    /// camera's room moves nothing; on a phone held upright, the fighters
-    /// are drawn smaller to make it.
+    /// The fighters stand on the line above their buttons, the ring's
+    /// middle at the window's middle, with all the room the camera asks
+    /// for on the screen, at every size.
     #[test]
-    fn room_for_a_lean_shrinks_the_fight_only_where_it_must() {
-        let leaning = Camera {
-            reach: [0.55, rp::FIGHTER_REACH],
-        };
+    fn the_ring_is_drawn_in_the_middle_with_the_cameras_room() {
+        let world = rp::world_frame();
+        for (width, height, touch) in WINDOWS {
+            let layout = Layout::without_buttons(width, height, touch);
+            for half in [LEAST_HALF, MOST_HALF] {
+                let camera = Camera { half };
+                let frame = layout.fighters_frame(&camera);
+                assert!((frame.origin.y + frame.height - layout.bottom as f64).abs() < 1.0e-9);
+                assert!(frame.height <= (layout.bottom - layout.top) as f64 + 1.0e-9);
+                let view = layout.view(&camera);
+                let at = |x: f64| view.to_screen(rp::Vec2 { x, y: 0.0 }).x;
+                let middle = SCENARIO_WIDTH * 0.5;
+                assert!((at(middle) - width as f64 * 0.5).abs() < 1.0e-6);
+                assert!(at(middle - half * world.height) >= FIGHTER_SIDE_MARGIN - 1.0e-6);
+                assert!(
+                    at(middle + half * world.height) <= width as f64 - FIGHTER_SIDE_MARGIN + 1.0e-6
+                );
+            }
+        }
+    }
+
+    /// On a wide screen the fighters are as tall as fits whatever room the
+    /// camera asks for; on a phone held upright they are drawn smaller to
+    /// make it.
+    #[test]
+    fn room_across_shrinks_the_fight_only_where_it_must() {
+        let (near, far) = (Camera { half: LEAST_HALF }, Camera { half: MOST_HALF });
         let wide = Layout::without_buttons(1280.0, 720.0, false);
-        assert_eq!(
-            wide.fighters_frame(&leaning),
-            wide.fighters_frame(&Camera::default())
-        );
+        assert_eq!(wide.fighters_frame(&far), wide.fighters_frame(&near));
         let tall = Layout::without_buttons(390.0, 844.0, true);
-        let (standing, leant) = (
-            tall.fighters_frame(&Camera::default()),
-            tall.fighters_frame(&leaning),
-        );
-        assert!(leant.height < standing.height);
-        let view = rp::View::fitting(rp::world_frame(), leant);
-        let [left, right] = rp::fighter_frames();
-        let height = rp::world_frame().height;
-        let from = view.to_screen(rp::Vec2 {
-            x: left.origin.x - 0.55 * height,
-            y: 0.0,
-        });
-        let to = view.to_screen(rp::Vec2 {
-            x: right.origin.x + rp::FIGHTER_REACH * height,
-            y: 0.0,
-        });
-        assert!(from.x >= FIGHTER_SIDE_MARGIN - 1.0e-9);
-        assert!(to.x <= 390.0 - FIGHTER_SIDE_MARGIN + 1.0e-9);
+        assert!(tall.fighters_frame(&far).height < tall.fighters_frame(&near).height);
     }
 }

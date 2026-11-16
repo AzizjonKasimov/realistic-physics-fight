@@ -157,19 +157,21 @@
     <!-- tools/build_web.ps1 fills in the game's version, the engine's, and
          what is new, from Cargo.toml, the engine, and CHANGELOG.md. -->
     <h1 id="title">Fight <span class="version"></span></h1>
-    <p class="tagline">Two fighters on a realistic injury simulation: punch, lean back out of a punch's way, and every blow hurts skin, muscle and bone through real physics.</p>
+    <p class="tagline">Two boxers seen from the side, on a realistic injury simulation: step in, jab, cross, block, duck, and lean back. Every blow hurts skin, muscle and bone through real physics, and a hard one to the jaw can knock a fighter out.</p>
     <p class="warning"><strong>Content warning:</strong> graphic simulated injury, including blood, torn tissue and broken bones.</p>
     <button id="start" type="button">Start the fight</button>
     <dl class="controls">
-      <dt>D or &rarr;</dt><dd>Punch the other fighter</dd>
-      <dt>A or &larr;</dt><dd>Hold to lean back, so a punch falls short</dd>
-      <dt>J / L</dt><dd>A friend punches / leans back with the right fighter; left alone, it spars on its own</dd>
+      <dt>D / A</dt><dd>Step in toward the other fighter / step back</dd>
+      <dt>W / S</dt><dd>Hold to lean back, so a punch falls short / hold to duck under it</dd>
+      <dt>J / K</dt><dd>Jab with your front hand / cross with your back hand</dd>
+      <dt>L</dt><dd>Hold to block: your forearms stop punches, which otherwise go between your open hands</dd>
+      <dt>Arrows , . /</dt><dd>A friend plays the right fighter: the arrows step, lean back, and duck; comma, full stop, and slash jab, cross, and block. Left alone, it spars on its own</dd>
       <dt>Space / R / M</dt><dd>Pause / start afresh / sound on or off</dd>
-      <dt>Touch</dt><dd>Tap PUNCH, hold LEAN BACK; a friend takes the buttons on the right</dd>
+      <dt>Touch</dt><dd>Your moves are buttons: steps, lean back, and duck at the bottom left, jab, cross, and block at the bottom right</dd>
     </dl>
     <section class="about" aria-labelledby="about-title">
       <h2 id="about-title">About</h2>
-      <p>Nobody wins yet: the fight goes on until you start it afresh. Deciding fights by their injuries, a computer opponent, and rounds come next.</p>
+      <p>A fight ends when a fighter is knocked out, or falls and cannot get up again; R starts the next. Fights decided by their other injuries, a computer opponent, and rounds come next.</p>
       <p>Made by <a href="https://azizjonkasimov.github.io/" target="_blank" rel="noopener">Azizjon Kasimov</a> with AI coding agents, on the engine of the <a href="../">Realistic Physics sandbox</a>.</p>
       <ul class="links">
         <li><a href="../">Back to the sandbox</a></li>

@@ -1,25 +1,86 @@
 //! The players' keys and buttons, read once a frame into what they ask for.
 //!
-//! Each fighter has two moves: a punch, with the arm nearer the other
-//! fighter, and lean back, held for as long as the key or button is. The
-//! left fighter's keys lie under a left hand (D punches, A leans back) and
-//! on the arrows for a player alone (→ punches toward the other fighter, ←
-//! leans away from it); the right fighter's lie under a right hand (J
-//! punches toward the left, L leans away). On a touch screen each fighter's
-//! two buttons sit at its own side of the bottom, and two players can hold
-//! a phone between them, each a side; every finger on the screen counts.
+//! Each fighter has seven moves. Four are pressed: a jab, a cross, a step
+//! toward the other fighter, and a step away from it. Three are held for as
+//! long as the key or button is: block, duck, and lean back.
+//!
+//! The left fighter's player moves it with the left hand on W A S D (D steps
+//! in, A steps back, W leans back, S ducks) and fights with the right on
+//! J K L (jab, cross, block). A second player takes the right fighter with
+//! the arrows (left steps in, right steps back, up leans back, down ducks)
+//! and comma, full stop, and slash, or 1 2 3 on the number pad (jab, cross,
+//! block). On the screen the left fighter's moves are buttons too, for a
+//! mouse or for fingers: its steps, lean, and duck at the bottom left, under
+//! a left thumb, and its jab, cross, and block at the bottom right, under a
+//! right thumb; every finger on the screen counts.
 
 use macroquad::prelude::*;
 
 use crate::hud::Layout;
 
+/// A move a fighter makes once each time its key or button is pressed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Act {
+    Jab,
+    Cross,
+    /// A step toward the other fighter, and one away from it.
+    StepIn,
+    StepOut,
+}
+
+impl Act {
+    pub const ALL: [Act; 4] = [Act::Jab, Act::Cross, Act::StepIn, Act::StepOut];
+
+    /// Its place in [`Act::ALL`].
+    pub fn index(self) -> usize {
+        self as usize
+    }
+
+    /// The name scripts and the page know it by.
+    pub fn name(self) -> &'static str {
+        match self {
+            Act::Jab => "jab",
+            Act::Cross => "cross",
+            Act::StepIn => "in",
+            Act::StepOut => "out",
+        }
+    }
+}
+
+/// A move a fighter makes for as long as its key or button is held.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Hold {
+    Block,
+    Duck,
+    /// Leaning back, out of a punch's reach.
+    Lean,
+}
+
+impl Hold {
+    pub const ALL: [Hold; 3] = [Hold::Block, Hold::Duck, Hold::Lean];
+
+    /// Its place in [`Hold::ALL`].
+    pub fn index(self) -> usize {
+        self as usize
+    }
+
+    /// The name scripts and the page know it by.
+    pub fn name(self) -> &'static str {
+        match self {
+            Hold::Block => "block",
+            Hold::Duck => "duck",
+            Hold::Lean => "lean",
+        }
+    }
+}
+
 /// A button on the screen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Button {
-    /// A fighter's lean back, held, and its punch, pressed: 0 the left
-    /// fighter's, 1 the right's.
-    Lean(usize),
-    Punch(usize),
+    /// A fighter's move, pressed or held: 0 the left fighter's, 1 the
+    /// right's.
+    Act(usize, Act),
+    Hold(usize, Hold),
     Pause,
     Restart,
     Sound,
@@ -27,18 +88,34 @@ pub enum Button {
     Sandbox,
 }
 
-/// The keys that punch with each fighter, the left fighter's first.
-pub const PUNCH_KEYS: [&[KeyCode]; 2] = [&[KeyCode::D, KeyCode::Right], &[KeyCode::J]];
-/// The keys that hold each fighter's lean back.
-pub const LEAN_KEYS: [&[KeyCode]; 2] = [&[KeyCode::A, KeyCode::Left], &[KeyCode::L]];
+/// The keys for each fighter's pressed moves, in [`Act::ALL`]'s order, the
+/// left fighter's first.
+pub const ACT_KEYS: [[&[KeyCode]; 4]; 2] = [
+    [&[KeyCode::J], &[KeyCode::K], &[KeyCode::D], &[KeyCode::A]],
+    [
+        &[KeyCode::Comma, KeyCode::Kp1],
+        &[KeyCode::Period, KeyCode::Kp2],
+        &[KeyCode::Left],
+        &[KeyCode::Right],
+    ],
+];
+/// The keys for each fighter's held moves, in [`Hold::ALL`]'s order.
+pub const HOLD_KEYS: [[&[KeyCode]; 3]; 2] = [
+    [&[KeyCode::L], &[KeyCode::S], &[KeyCode::W]],
+    [
+        &[KeyCode::Slash, KeyCode::Kp3],
+        &[KeyCode::Down],
+        &[KeyCode::Up],
+    ],
+];
 
 /// What the players asked for this frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Intents {
-    /// A punch pressed for, by fighter.
-    pub punch: [bool; 2],
-    /// Lean back held, by fighter.
-    pub lean: [bool; 2],
+    /// The moves pressed for, by fighter, in [`Act::ALL`]'s order.
+    pub acts: [[bool; 4]; 2],
+    /// The moves held, by fighter, in [`Hold::ALL`]'s order.
+    pub holds: [[bool; 3]; 2],
     pub pause: bool,
     pub restart: bool,
     pub mute: bool,
@@ -116,10 +193,18 @@ pub fn intents_from<P: Fn(KeyCode) -> bool, D: Fn(KeyCode) -> bool>(
 ) -> Intents {
     let mut intents = Intents::default();
     for fighter in 0..2 {
-        intents.punch[fighter] = pressed.contains(&Button::Punch(fighter))
-            || PUNCH_KEYS[fighter].iter().any(|&key| (keys.pressed)(key));
-        intents.lean[fighter] = held.contains(&Button::Lean(fighter))
-            || LEAN_KEYS[fighter].iter().any(|&key| (keys.down)(key));
+        for act in Act::ALL {
+            intents.acts[fighter][act.index()] = pressed.contains(&Button::Act(fighter, act))
+                || ACT_KEYS[fighter][act.index()]
+                    .iter()
+                    .any(|&key| (keys.pressed)(key));
+        }
+        for hold in Hold::ALL {
+            intents.holds[fighter][hold.index()] = held.contains(&Button::Hold(fighter, hold))
+                || HOLD_KEYS[fighter][hold.index()]
+                    .iter()
+                    .any(|&key| (keys.down)(key));
+        }
     }
     intents.pause = pressed.contains(&Button::Pause)
         || (keys.pressed)(KeyCode::Space)
@@ -146,45 +231,82 @@ mod tests {
         }
     }
 
-    /// A player alone plays the left fighter on the arrows as on D and A:
-    /// toward the other fighter punches, away leans back.
+    /// What `intents` asks of `fighter`: its pressed moves and its held ones.
+    fn asked(intents: &Intents, fighter: usize) -> (Vec<Act>, Vec<Hold>) {
+        (
+            Act::ALL
+                .into_iter()
+                .filter(|act| intents.acts[fighter][act.index()])
+                .collect(),
+            Hold::ALL
+                .into_iter()
+                .filter(|hold| intents.holds[fighter][hold.index()])
+                .collect(),
+        )
+    }
+
+    /// The left fighter moves on W A S D and fights on J K L, and none of
+    /// its keys move the right fighter.
     #[test]
-    fn the_left_fighter_answers_its_letters_and_the_arrows() {
-        for punch in [KeyCode::D, KeyCode::Right] {
-            let intents = intents_from(&[], &[], &keys(&[punch], &[]));
-            assert_eq!(intents.punch, [true, false], "{punch:?}");
+    fn the_left_fighter_answers_wasd_and_jkl() {
+        for (key, act) in [
+            (KeyCode::J, Act::Jab),
+            (KeyCode::K, Act::Cross),
+            (KeyCode::D, Act::StepIn),
+            (KeyCode::A, Act::StepOut),
+        ] {
+            let intents = intents_from(&[], &[], &keys(&[key], &[]));
+            assert_eq!(asked(&intents, 0), (vec![act], vec![]), "{key:?}");
+            assert_eq!(asked(&intents, 1), (vec![], vec![]), "{key:?}");
         }
-        for lean in [KeyCode::A, KeyCode::Left] {
-            let intents = intents_from(&[], &[], &keys(&[], &[lean]));
-            assert_eq!(intents.lean, [true, false], "{lean:?}");
+        for (key, hold) in [
+            (KeyCode::L, Hold::Block),
+            (KeyCode::S, Hold::Duck),
+            (KeyCode::W, Hold::Lean),
+        ] {
+            let intents = intents_from(&[], &[], &keys(&[], &[key]));
+            assert_eq!(asked(&intents, 0), (vec![], vec![hold]), "{key:?}");
+            assert_eq!(asked(&intents, 1), (vec![], vec![]), "{key:?}");
         }
     }
 
-    /// The right fighter answers J and L, and its keys never move the left.
+    /// The right fighter moves on the arrows, toward the left fighter with
+    /// the left arrow, and fights on comma, full stop, and slash, or the
+    /// number pad's 1 2 3.
     #[test]
-    fn the_right_fighter_answers_j_and_l() {
-        let intents = intents_from(&[], &[], &keys(&[KeyCode::J], &[KeyCode::L]));
-        assert_eq!(
-            (intents.punch, intents.lean),
-            ([false, true], [false, true])
-        );
+    fn the_right_fighter_answers_the_arrows_and_its_three_keys() {
+        for (key, act) in [
+            (KeyCode::Comma, Act::Jab),
+            (KeyCode::Kp1, Act::Jab),
+            (KeyCode::Period, Act::Cross),
+            (KeyCode::Kp2, Act::Cross),
+            (KeyCode::Left, Act::StepIn),
+            (KeyCode::Right, Act::StepOut),
+        ] {
+            let intents = intents_from(&[], &[], &keys(&[key], &[]));
+            assert_eq!(asked(&intents, 1), (vec![act], vec![]), "{key:?}");
+            assert_eq!(asked(&intents, 0), (vec![], vec![]), "{key:?}");
+        }
+        for (key, hold) in [
+            (KeyCode::Slash, Hold::Block),
+            (KeyCode::Kp3, Hold::Block),
+            (KeyCode::Down, Hold::Duck),
+            (KeyCode::Up, Hold::Lean),
+        ] {
+            let intents = intents_from(&[], &[], &keys(&[], &[key]));
+            assert_eq!(asked(&intents, 1), (vec![], vec![hold]), "{key:?}");
+        }
     }
 
-    /// A punch button punches once, as it is pressed; a lean button leans
-    /// for as long as it is held.
+    /// A pressed move's button makes it once, as it is pressed; a held
+    /// move's button holds it for as long as it is held.
     #[test]
-    fn buttons_punch_when_pressed_and_lean_while_held() {
-        let held = [Button::Punch(0), Button::Lean(1)];
+    fn buttons_act_when_pressed_and_hold_while_held() {
+        let held = [Button::Act(0, Act::Cross), Button::Hold(0, Hold::Block)];
         let pressed = intents_from(&held, &held, &keys(&[], &[]));
-        assert_eq!(
-            (pressed.punch, pressed.lean),
-            ([true, false], [false, true])
-        );
+        assert_eq!(asked(&pressed, 0), (vec![Act::Cross], vec![Hold::Block]));
         let still_held = intents_from(&held, &[], &keys(&[], &[]));
-        assert_eq!(
-            (still_held.punch, still_held.lean),
-            ([false, false], [false, true])
-        );
+        assert_eq!(asked(&still_held, 0), (vec![], vec![Hold::Block]));
     }
 
     /// The game's own keys pause, restart, mute, and go back.

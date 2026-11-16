@@ -3,6 +3,16 @@
 Each version of the Fight page, newest first. The page shows the newest
 entry's lines as written.
 
+## v0.2 (2026-11-16)
+
+- The fighters now stand side-on, facing each other, on their own legs, and move like boxers: they step in and back, jab, cross, duck, and lean back.
+- A punch goes between the other fighter's open hands and lands on its head. Hold BLOCK and your forearms stop it.
+- Punches are as fast and as heavy as a trained boxer's.
+- A punch that turns the head hard enough knocks a fighter out. It goes down and stays down, and the fight is over: press R to fight again.
+- The sparring partner comes into reach on its own, punches, and sometimes covers up, ducks, or steps back.
+- New keys: W A S D to move, J K L to jab, cross, and block; a friend takes the right fighter with the arrows and the comma, full stop, and slash keys.
+- On a phone your seven moves are buttons; a friend now plays the right fighter from the keyboard only.
+
 ## v0.1.2 (2026-10-20)
 
 - Punching again and again, or punching from a lean, no longer tears your fighter's wrist, elbow, or lower back.

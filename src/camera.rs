@@ -1,107 +1,112 @@
-//! The camera: how much room the screen leaves each fighter. Standing, a
-//! fighter needs room for its guard and its punch, as the sandbox leaves it
-//! (`rp::FIGHTER_REACH`). Leaning back, its far arm, braced to its trunk,
-//! swings out to about 0.53 body heights from where it stood, which on a
-//! phone held upright, where the fighters fill the width, would leave the
-//! screen. So the camera makes room as a fighter reaches out, at once, and
-//! takes it back slowly once the fighter comes back: the fighters are drawn
-//! as large as what they are doing allows.
+//! The camera: how much of the ring the screen shows. The fighters step in
+//! and out, lean back, and are knocked about, so the room they need across
+//! the screen changes. On a wide screen there is room for the whole ring
+//! with the fighters drawn as tall as fits, and nothing moves; on a narrow
+//! one, a phone held upright, the fighters are drawn as large as the room
+//! they need allows: the camera makes room at once as one moves out, and
+//! takes it back slowly once it comes back in.
 
 use realistic_physics as rp;
+use rp::scenarios::SCENARIO_WIDTH;
 
-use crate::game::{LEFT, RIGHT};
+use crate::game::RING_HALF;
 
-/// Room kept past a fighter's furthest flesh, in body heights, so the
+/// Room kept past the fighters' furthest flesh, in body heights, so the
 /// flesh's own small sway does not move the camera.
-const PAD: f64 = 0.02;
-/// The most room the camera makes a fighter, in body heights from where it
-/// stood: flesh flung further leaves the screen rather than shrink the
+const PAD: f64 = 0.04;
+/// The least the screen shows each side of the ring's middle, in body
+/// heights: the fighters where they start, with their guards and room for
+/// a punch.
+pub const LEAST_HALF: f64 = 0.74;
+/// The most it shows: a fighter at the ring's edge, leaning back with its
+/// arms out. Flesh flung further leaves the screen rather than shrink the
 /// fight to nothing.
-const MOST_REACH: f64 = 0.6;
-/// How slowly the room comes back once a fighter stops reaching out: the
-/// time it takes to close all but a third of the gap, in seconds.
+pub const MOST_HALF: f64 = RING_HALF + 0.45;
+/// How slowly the room comes back once the fighters need less: the time it
+/// takes to close all but a third of the gap, in seconds.
 const EASE_SECONDS: f64 = 0.5;
 
-/// How much room the screen leaves each fighter.
+/// How much of the ring the screen shows.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Camera {
-    /// How far out from where each fighter stood the screen leaves room, on
-    /// its side away from the other, in body heights, the left fighter's
-    /// first.
-    pub reach: [f64; 2],
+    /// How far each side of the ring's middle the screen shows, in body
+    /// heights.
+    pub half: f64,
 }
 
 impl Default for Camera {
-    /// Room for both fighters' guards and punches.
+    /// Room for both fighters where they start.
     fn default() -> Camera {
-        Camera {
-            reach: [rp::FIGHTER_REACH; 2],
-        }
+        Camera { half: LEAST_HALF }
     }
 }
 
 impl Camera {
-    /// Follows the fighters `dt` seconds on: out at once as far as each
-    /// reaches, so nothing of them leaves the screen, and back in smoothly,
-    /// never closer than room for the guard.
+    /// Follows the fighters `dt` seconds on: out at once as far as either
+    /// reaches, so nothing of them leaves the screen, and back in smoothly.
     pub fn follow(&mut self, world: &rp::World, dt: f64) {
         let ease = 1.0 - (-dt / EASE_SECONDS).exp();
-        for (reach, out) in self.reach.iter_mut().zip(reaches(world)) {
-            let need = (out + PAD).clamp(rp::FIGHTER_REACH, MOST_REACH);
-            *reach = if need > *reach {
-                need
-            } else {
-                *reach + (need - *reach) * ease
-            };
-        }
+        let need = (reach(world) + PAD).clamp(LEAST_HALF, MOST_HALF);
+        self.half = if need > self.half {
+            need
+        } else {
+            self.half + (need - self.half) * ease
+        };
     }
 }
 
-/// How far each fighter's flesh reaches out from where it stood, on its
-/// side away from the other, in body heights, the left fighter's first.
-pub fn reaches(world: &rp::World) -> [f64; 2] {
-    let [left, right] = rp::fighter_frames();
-    let mut out = [f64::MIN; 2];
-    for point in world.points() {
-        match point.body as usize {
-            LEFT => out[LEFT] = out[LEFT].max(left.origin.x - point.position.x),
-            RIGHT => out[RIGHT] = out[RIGHT].max(point.position.x - right.origin.x),
-            _ => {}
-        }
-    }
-    [out[LEFT] / left.height, out[RIGHT] / right.height]
+/// How far the fighters' flesh reaches from the ring's middle, in body
+/// heights, on the side it reaches furthest.
+pub fn reach(world: &rp::World) -> f64 {
+    let middle = SCENARIO_WIDTH * 0.5;
+    world
+        .points()
+        .iter()
+        .map(|point| (point.position.x - middle).abs())
+        .fold(0.0, f64::max)
+        / rp::world_frame().height
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::game::Game;
+    use crate::controls::{Act, Hold};
+    use crate::game::{Game, LEFT};
     use crate::hud::Layout;
 
-    /// Standing, the fighters get the room for their guards and punches,
-    /// as the sandbox gives them.
+    /// Standing where they start, the fighters get the least room: the
+    /// camera does not move for their stance's sway.
     #[test]
-    fn standing_fighters_get_room_for_their_guards() {
+    fn standing_fighters_get_the_room_they_start_with() {
         let mut game = Game::new(1);
         game.second_player_joins();
         for _ in 0..60 {
             game.step();
+            game.second_player_joins();
         }
         assert_eq!(game.camera, Camera::default());
     }
 
-    /// On a phone held upright, where the fighters fill the width, a fighter
-    /// leaning back stays on the screen, the other fighter too: the camera
-    /// makes room at once, and gives it back once the lean is over.
+    /// On a phone held upright, a fighter stepping back to the ring's edge
+    /// and leaning back there stays on the screen, the other fighter too:
+    /// the camera makes room at once, and gives it back once the fighter
+    /// comes back in. Each step is pressed once the one before is done: a
+    /// step on the fighter's own legs takes about 0.6 s, and a step pressed
+    /// in the middle of one is not taken.
     #[test]
-    fn a_leaning_fighter_stays_on_a_phone_held_upright() {
+    fn a_fighter_at_the_rings_edge_stays_on_a_phone_held_upright() {
         let width = 390.0;
         let layout = Layout::without_buttons(width, 844.0, true);
         let mut game = Game::new(1);
-        game.second_player_joins();
         let mut widest = 0.0_f64;
-        for step in 0..360 {
-            game.hold_lean(LEFT, step < 90);
+        for step in 0..480 {
+            game.second_player_joins();
+            match step {
+                10 | 60 => game.press(LEFT, Act::StepOut),
+                240 | 290 => game.press(LEFT, Act::StepIn),
+                _ => {}
+            }
+            game.hold(LEFT, Hold::Lean, (110..200).contains(&step));
             game.step();
             let view = layout.view(&game.camera);
             for point in game.world.points() {
@@ -112,21 +117,16 @@ mod tests {
                     point.body
                 );
             }
-            widest = widest.max(game.camera.reach[LEFT]);
+            widest = widest.max(game.camera.half);
         }
         assert!(
-            widest > 0.45,
-            "the camera made only {widest:.3} body heights of room for the lean"
-        );
-        assert_eq!(
-            game.camera.reach[RIGHT],
-            rp::FIGHTER_REACH,
-            "the fighter that did not lean kept its room"
+            widest > LEAST_HALF + 0.15,
+            "the camera made only {widest:.3} body heights of room"
         );
         assert!(
-            (game.camera.reach[LEFT] - rp::FIGHTER_REACH).abs() < 1.0e-3,
-            "the room for the lean was not given back: {:.3}",
-            game.camera.reach[LEFT]
+            game.camera.half < LEAST_HALF + 0.05,
+            "the room was not given back: {:.3}",
+            game.camera.half
         );
     }
 }

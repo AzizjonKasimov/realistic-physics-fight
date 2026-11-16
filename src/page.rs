@@ -15,14 +15,20 @@ use crate::controls::Button;
 /// Something a player does that the page counts the first time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Moment {
-    /// The player's fighter threw a punch.
+    /// The player's fighter threw a jab or a cross.
     Punch,
-    /// The player's fighter leaned back.
+    /// The player's fighter blocked, ducked, or leaned back.
+    Block,
+    Duck,
     Lean,
+    /// The player's fighter took a step.
+    Step,
     /// A second player took over the right fighter.
     SecondPlayer,
     /// The fight was started afresh.
     Restart,
+    /// A fighter was knocked out, either one.
+    Knockout,
 }
 
 impl Moment {
@@ -32,6 +38,10 @@ impl Moment {
             Moment::Lean => 2,
             Moment::SecondPlayer => 4,
             Moment::Restart => 8,
+            Moment::Block => 16,
+            Moment::Duck => 32,
+            Moment::Step => 64,
+            Moment::Knockout => 128,
         }
     }
 
@@ -39,9 +49,13 @@ impl Moment {
     pub fn name(self) -> &'static str {
         match self {
             Moment::Punch => "punch",
+            Moment::Block => "block",
+            Moment::Duck => "duck",
             Moment::Lean => "lean",
+            Moment::Step => "step",
             Moment::SecondPlayer => "two-players",
             Moment::Restart => "restart",
+            Moment::Knockout => "knockout",
         }
     }
 }
@@ -69,8 +83,8 @@ pub fn back_to_sandbox() {
 }
 
 /// Tells the page where the buttons are, in the page's pixels, by name:
-/// `lean1`, `punch1`, `punch2`, `lean2`, `pause`, `restart`, `sound`,
-/// `sandbox`.
+/// the left fighter's `jab1`, `cross1`, `in1`, `out1`, `block1`, `duck1`,
+/// and `lean1`, then `pause`, `restart`, `sound`, `sandbox`.
 pub fn show_buttons(buttons: &[(Button, Rect)]) {
     let list: Vec<String> = buttons
         .iter()
@@ -88,10 +102,12 @@ pub fn show_buttons(buttons: &[(Button, Rect)]) {
     platform::buttons(&format!("[{}]", list.join(",")));
 }
 
-fn button_name(button: Button) -> String {
+/// A button's name: a fighter's move with the fighter's number after it,
+/// as scripts write it (`capture.rs`).
+pub fn button_name(button: Button) -> String {
     match button {
-        Button::Lean(fighter) => format!("lean{}", fighter + 1),
-        Button::Punch(fighter) => format!("punch{}", fighter + 1),
+        Button::Act(fighter, act) => format!("{}{}", act.name(), fighter + 1),
+        Button::Hold(fighter, hold) => format!("{}{}", hold.name(), fighter + 1),
         Button::Pause => "pause".to_string(),
         Button::Restart => "restart".to_string(),
         Button::Sound => "sound".to_string(),
