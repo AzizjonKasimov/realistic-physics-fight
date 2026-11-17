@@ -115,7 +115,7 @@ pub struct Tally {
     pub guarding: f64,
     pub in_reach: f64,
     pub outcome: Option<Outcome>,
-    /// A fighter fell with no knockout.
+    /// A fighter went down, knocked down or slipping.
     pub fell: bool,
 }
 
@@ -154,6 +154,9 @@ pub fn play_bout(level: Level, player: Player, seed: u64, rules: Rules) -> Tally
         if game.apart() <= REACH {
             tally.in_reach += dt;
         }
+        tally.fell |= [LEFT, RIGHT]
+            .into_iter()
+            .any(|fighter| game.world.fighter_fallen(fighter));
         for punch in game.world.landed_punches() {
             if bout::clean(punch.struck) {
                 tally.clean[punch.by] += 1;
@@ -166,13 +169,6 @@ pub fn play_bout(level: Level, player: Player, seed: u64, rules: Rules) -> Tally
         }
     }
     tally.outcome = game.outcome().map(|(outcome, _)| outcome);
-    tally.fell = matches!(
-        tally.outcome,
-        Some(Outcome::Down {
-            knocked_out: false,
-            ..
-        })
-    );
     tally
 }
 

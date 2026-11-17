@@ -6,9 +6,12 @@
 //! goes through the other fighter's open hands and lands on its head; a
 //! held block stops it on the forearms. Blows hurt the fighters as they
 //! hurt bodies in the sandbox, and a blow that turns the head hard enough
-//! knocks a fighter out (the engine's `knockout.rs`): it goes down and
-//! stays down. The fight is a bout of rounds (`bout.rs`): a knockout or a
-//! fall ends it at once, and otherwise more clean punches wins when the
+//! knocks a fighter out (the engine's `knockout.rs`): it goes down, lies
+//! limp for longer the harder the blow, and gets up on its own, as a fighter
+//! that falls does (the engine's `rise.rs`). The fight is a bout of rounds
+//! (`bout.rs`): a fighter knocked down gets a referee's count while the
+//! other goes back to its corner, and is knocked out if still down at ten;
+//! three knockdowns end the bout; otherwise more clean punches wins when the
 //! last round ends. Between rounds both fighters go back to their corners.
 //! A fight is started afresh by hand.
 
@@ -259,26 +262,45 @@ impl Game {
     /// count.
     fn walk_to_corners(&mut self) {
         for fighter in [LEFT, RIGHT] {
-            self.acts[fighter] = [false; 4];
-            self.holds[fighter] = [false; 3];
-            let (Some(stands), Some(doing)) = (
-                self.world.fighter_stands(fighter),
-                self.world.fighter_doing(fighter),
-            ) else {
-                continue;
-            };
-            if doing.step.is_some() || doing.lean > 0.2 || doing.duck > 0.2 {
-                continue;
-            }
-            let height = rp::world_frame().height;
-            let middle = SCENARIO_WIDTH * 0.5;
-            // How far nearer the ring's middle than its corner it stands.
-            let ahead = ((self.corners[fighter] - middle).abs() - (stands - middle).abs()) / height;
-            if ahead > 0.5 * STEP {
-                self.acts[fighter][Act::StepOut.index()] = true;
-            } else if ahead < -0.5 * STEP {
-                self.acts[fighter][Act::StepIn.index()] = true;
-            }
+            self.walk_to(fighter, self.corners[fighter]);
+        }
+    }
+
+    /// While the referee counts over the other fighter, `fighter` goes back
+    /// to the ring's edge on its side, as a boxer goes to a neutral corner,
+    /// out of the way of the fighter getting up. Sent to where it began the
+    /// fight instead, a step out of the other's reach, it stood over the
+    /// fighter down, which got up under it.
+    fn walk_to_neutral_corner(&mut self, fighter: usize) {
+        let side = if fighter == LEFT { -1.0 } else { 1.0 };
+        let edge =
+            SCENARIO_WIDTH * 0.5 + side * (RING_HALF - 0.5 * STEP) * rp::world_frame().height;
+        self.walk_to(fighter, edge);
+    }
+
+    /// `fighter` goes to `place` across the world, a step at a time, and
+    /// stands there with its guard let go of; its player's moves do not
+    /// count.
+    fn walk_to(&mut self, fighter: usize, place: f64) {
+        self.acts[fighter] = [false; 4];
+        self.holds[fighter] = [false; 3];
+        let (Some(stands), Some(doing)) = (
+            self.world.fighter_stands(fighter),
+            self.world.fighter_doing(fighter),
+        ) else {
+            return;
+        };
+        if doing.fallen || doing.step.is_some() || doing.lean > 0.2 || doing.duck > 0.2 {
+            return;
+        }
+        let height = rp::world_frame().height;
+        let middle = SCENARIO_WIDTH * 0.5;
+        // How far nearer the ring's middle than that place it stands.
+        let ahead = ((place - middle).abs() - (stands - middle).abs()) / height;
+        if ahead > 0.5 * STEP {
+            self.acts[fighter][Act::StepOut.index()] = true;
+        } else if ahead < -0.5 * STEP {
+            self.acts[fighter][Act::StepIn.index()] = true;
         }
     }
 
@@ -292,6 +314,12 @@ impl Game {
         }
         if matches!(self.bout.stage(), bout::Stage::Break(_)) {
             self.walk_to_corners();
+        } else if let Some(count) = self.bout.count() {
+            // The referee counts over the fighter down, which gets up on its
+            // own, while the other waits in its corner.
+            self.acts[count.down] = [false; 4];
+            self.holds[count.down] = [false; 3];
+            self.walk_to_neutral_corner(1 - count.down);
         } else if !self.second_player_plays() {
             // Once the fight is over the opponent stops, its guard let go
             // of, and stands in its stance.
@@ -370,30 +398,18 @@ impl Game {
         self.world.step(dt, &input, SCENARIO_WIDTH);
         self.rim.refresh(&self.world);
         self.camera.follow(&self.world, dt);
-        // Should both go down on one step, the left fighter's fall is the
-        // one that counts.
-        let down = [LEFT, RIGHT]
-            .into_iter()
-            .find(|&fighter| self.world.fighter_fallen(fighter))
-            .map(|fighter| (fighter, self.world.knocked_out(fighter)));
+        let down = [LEFT, RIGHT].map(|fighter| self.world.fighter_fallen(fighter));
         let bell = self.bout.tick(dt, self.world.landed_punches(), down);
         match bell {
             Some(Bell::BoutOver) => {
-                if matches!(
-                    self.bout.outcome(),
-                    Some((
-                        Outcome::Down {
-                            knocked_out: true,
-                            ..
-                        },
-                        _
-                    ))
-                ) {
+                if matches!(self.bout.outcome(), Some((Outcome::KnockedOut { .. }, _))) {
                     page::tell(Moment::Knockout);
                 }
             }
-            Some(Bell::RoundBegins(_)) => self.opponent.new_round(),
-            Some(Bell::RoundOver(_)) | None => {}
+            // The fight goes on after a count, or a round begins: the
+            // opponent starts afresh.
+            Some(Bell::RoundBegins(_) | Bell::Box) => self.opponent.new_round(),
+            Some(Bell::RoundOver(_) | Bell::Knockdown(_)) | None => {}
         }
     }
 
@@ -553,65 +569,85 @@ mod tests {
         Game::with(seed, Level::Normal, Rules::default(), easy_knockouts())
     }
 
-    /// The player's cross knocks out the other fighter, and the fight is
-    /// over: the right fighter is down, knocked out, and stays so.
+    /// The player's cross knocks the other fighter down, knocked out: the
+    /// referee counts over it while the player goes back to its corner,
+    /// moving on its own, whatever its keys say, and throws nothing at it.
+    /// It gets up, and the fight goes on once the count has reached eight;
+    /// the knockdown is counted against it.
     #[test]
-    fn a_knockout_ends_the_fight() {
+    fn a_knockdown_is_counted_and_the_fighter_gets_up() {
         let mut game = knockouts_easy(1);
         game.second_player_joins();
         game.press(LEFT, Act::StepIn);
         steps(&mut game, 40);
         game.second_player_joins();
+        let stood = game.world.fighter_stands(LEFT);
         game.press(LEFT, Act::Cross);
-        steps(&mut game, 60);
-        let knocked_out = Outcome::Down {
-            down: RIGHT,
-            knocked_out: true,
-            round: 1,
-        };
-        assert_eq!(
-            game.outcome().map(|(outcome, _)| outcome),
-            Some(knocked_out),
-            "the cross did not end the fight"
+        let mut counted = false;
+        for _ in 0..60 {
+            game.step();
+            counted |= game.bout.count().is_some_and(|count| count.down == RIGHT);
+        }
+        assert!(counted, "the cross knocked nobody down");
+        assert!(
+            game.world.knocked_out(RIGHT),
+            "the right fighter is not out"
         );
-        game.second_player_joins();
-        steps(&mut game, 120);
-        assert_eq!(
-            game.outcome().map(|(outcome, _)| outcome),
-            Some(knocked_out),
-            "the fight's ending changed"
+        let mut resumed = None;
+        for step in 0..12 * 60 {
+            // The player presses its punches while the other is down.
+            if step % 20 == 0 {
+                game.press(LEFT, Act::Cross);
+                game.second_player_joins();
+            }
+            game.step();
+            assert_ne!(
+                game.world.striking_body(),
+                Some(LEFT),
+                "the player punched a fighter down, {step} steps on"
+            );
+            if game.bout.count().is_none() {
+                resumed = Some(step);
+                break;
+            }
+        }
+        assert!(
+            resumed.is_some_and(|step| step > 60) && !game.world.fighter_fallen(RIGHT),
+            "the count ended on step {resumed:?}, the fighter down: {}",
+            game.world.fighter_fallen(RIGHT)
         );
-        assert!(game.world.fighter_fallen(RIGHT));
+        assert!(
+            game.world.fighter_stands(LEFT) != stood,
+            "the player stayed where it stood during the count"
+        );
+        assert_eq!(game.bout.knockdowns(), [0, 1]);
+        assert_eq!(game.outcome(), None, "the fight ended at the knockdown");
     }
 
-    /// Once the opponent has knocked the player out it stops: it lets go of
-    /// whatever it held, takes no more steps, and throws nothing.
+    /// A fighter still down at the count of ten is knocked out and the
+    /// fight is over; the opponent that knocked it out stops: it lets go of
+    /// whatever it held and throws nothing more.
     #[test]
-    fn the_opponent_stops_once_a_fighter_is_down() {
-        let mut game = knockouts_easy(5);
-        for _ in 0..15 * 60 {
+    fn still_down_at_ten_ends_the_fight_and_the_opponent_stops() {
+        let mut materials = easy_knockouts();
+        // Out for long enough that the count reaches ten.
+        materials.knockout_seconds = 30.0;
+        let mut game = Game::with(5, Level::Normal, Rules::default(), materials);
+        for _ in 0..30 * 60 {
             game.step();
             if game.outcome().is_some() {
                 break;
             }
         }
         let Some((outcome, _)) = game.outcome() else {
-            panic!("the opponent knocked nobody out in fifteen seconds");
+            panic!("the opponent knocked nobody out in thirty seconds");
         };
         assert!(
-            matches!(
-                outcome,
-                Outcome::Down {
-                    down: LEFT,
-                    knocked_out: true,
-                    ..
-                }
-            ),
+            matches!(outcome, Outcome::KnockedOut { down: LEFT, .. }),
             "{outcome:?}"
         );
         // A step it was in the middle of finishes.
         steps(&mut game, 50);
-        let stands = game.world.fighter_stands(RIGHT);
         for step in 0..180 {
             game.step();
             assert_eq!(game.holds[RIGHT], [false; 3], "it held something");
@@ -621,11 +657,6 @@ mod tests {
                 "it threw a punch {step} steps on"
             );
         }
-        assert_eq!(
-            game.world.fighter_stands(RIGHT),
-            stands,
-            "it stepped once the player was down"
-        );
     }
 
     /// A second player takes the right fighter by pressing its keys, and

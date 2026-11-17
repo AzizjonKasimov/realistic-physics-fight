@@ -1,12 +1,37 @@
 //! A bout: three rounds of a minute each, with ten seconds between them,
-//! the fighters back in their corners. A knockout or a fall ends it at once,
-//! as no fighter gets up yet. Otherwise, when the last round ends, the
-//! fighter who landed more clean punches wins, as Olympic boxing's computer
-//! scoring counted them from 1992 to 2012: a punch counts that lands on the
-//! head or the body, not one stopped on the arms. Equal counts are a draw.
-//! What a punch struck is the engine's to say (`rp::World::landed_punches`).
+//! the fighters back in their corners. A fighter knocked down by a punch
+//! gets a referee's count, a second at a time, while the other waits in a
+//! corner: up by ten, it fights on once the count has reached eight (the
+//! mandatory eight count), and still down at ten it is knocked out and the
+//! bout is over. A third knockdown ends the bout too, as amateur boxing's
+//! referees stop a bout after three counts in a round. A fighter that goes
+//! down with no clean punch landing on it just before slipped, and is not
+//! counted (the Association of Boxing Commissions' referee manual: slips
+//! and pushes are not knockdowns); it gets up on its own. The bell does not
+//! save a fighter: a round that runs out during a count ends once the count
+//! does. Otherwise, when the last round ends, the fighter who landed more
+//! clean punches wins, as Olympic boxing's computer scoring counted them
+//! from 1992 to 2012: a punch counts that lands on the head or the body, not
+//! one stopped on the arms. Equal counts are a draw. What a punch struck is
+//! the engine's to say (`rp::World::landed_punches`), and whether a fighter
+//! is down (`rp::World::fighter_fallen`): the engine's fighters get up on
+//! their own.
 
 use realistic_physics as rp;
+
+/// How many seconds after a clean punch lands a fighter going down counts
+/// as knocked down by it, rather than slipping: a knocked-out fighter is on
+/// the floor within about a second, and one pushed off its feet by a punch
+/// sooner.
+pub const KNOCKED_DOWN_SECONDS: f64 = 2.0;
+
+/// The count: a fighter still down at its tenth second is knocked out, and
+/// one up sooner fights on once it has reached eight.
+pub const COUNT_OUT: f64 = 10.0;
+pub const MANDATORY_COUNT: f64 = 8.0;
+
+/// How many knockdowns end a bout.
+pub const KNOCKDOWNS_STOP_IT: u32 = 3;
 
 /// How long a bout is.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -43,24 +68,46 @@ pub enum Stage {
 /// How a bout ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
-    /// A fighter went down, knocked out by a blow to its head or fallen,
-    /// in round `round`, and the other won.
-    Down {
-        down: usize,
-        knocked_out: bool,
-        round: u32,
-    },
+    /// A fighter was still down at the count of ten, in round `round`: a
+    /// knockout, and the other won.
+    KnockedOut { down: usize, round: u32 },
+    /// A fighter went down for the third time, in round `round`: the
+    /// referee stopped the bout, and the other won.
+    Stopped { down: usize, round: u32 },
     /// The last round ended with both standing: the fighter with more clean
     /// punches won, or none, a draw.
     Decision { winner: Option<usize> },
 }
 
-/// Something the bell marks.
+/// A referee's count over a fighter knocked down.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Count {
+    /// The fighter down.
+    pub down: usize,
+    /// Seconds since it went down.
+    pub seconds: f64,
+    /// It stands again, its knockdown beaten so far.
+    pub up: bool,
+}
+
+impl Count {
+    /// The number the referee has called: one a second, from one.
+    pub fn called(&self) -> u32 {
+        // A second's steps add up to a hair under it.
+        ((self.seconds + 1.0e-6).floor() as u32).min(COUNT_OUT as u32)
+    }
+}
+
+/// Something the bell or the referee marks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Bell {
     RoundOver(u32),
     RoundBegins(u32),
     BoutOver,
+    /// A fighter was knocked down, and the count over it begins.
+    Knockdown(usize),
+    /// The count is over, the fighter up: the fight goes on.
+    Box,
 }
 
 /// A bout under way.
@@ -74,6 +121,14 @@ pub struct Bout {
     /// Clean punches each fighter landed in each round, the left fighter's
     /// first.
     clean: Vec<[u32; 2]>,
+    /// The count under way, if a fighter is down.
+    count: Option<Count>,
+    /// Each fighter's knockdowns so far.
+    knockdowns: [u32; 2],
+    /// Seconds since a clean punch last landed on each fighter.
+    hit: [Option<f64>; 2],
+    /// Whether each fighter was down on the last step.
+    was_down: [bool; 2],
 }
 
 impl Bout {
@@ -83,6 +138,10 @@ impl Bout {
             stage: Stage::Round(1),
             clock: rules.round_seconds,
             clean: vec![[0; 2]],
+            count: None,
+            knockdowns: [0; 2],
+            hit: [None; 2],
+            was_down: [false; 2],
         }
     }
 
@@ -96,6 +155,16 @@ impl Bout {
             Stage::Over(outcome) => Some((outcome, self.clock)),
             _ => None,
         }
+    }
+
+    /// The count under way, if a fighter is down.
+    pub fn count(&self) -> Option<Count> {
+        self.count
+    }
+
+    /// Each fighter's knockdowns so far.
+    pub fn knockdowns(&self) -> [u32; 2] {
+        self.knockdowns
     }
 
     /// The round under way, or the last one fought.
@@ -129,39 +198,80 @@ impl Bout {
             .unwrap_or_default()
     }
 
+    /// Ends the bout as `outcome`.
+    fn end(&mut self, outcome: Outcome) -> Option<Bell> {
+        self.stage = Stage::Over(outcome);
+        self.clock = 0.0;
+        self.count = None;
+        Some(Bell::BoutOver)
+    }
+
     /// Lets `dt` seconds of the bout pass, the punches `landed` this step
-    /// counted while a round is under way, and the fighter `down` (and
-    /// whether knocked out), if one has gone down: what the bell marks, if
-    /// anything.
-    pub fn tick(
-        &mut self,
-        dt: f64,
-        landed: &[rp::LandedPunch],
-        down: Option<(usize, bool)>,
-    ) -> Option<Bell> {
+    /// counted while a round is under way, each fighter `down` or not as the
+    /// engine has it: what the bell or the referee marks, if anything.
+    pub fn tick(&mut self, dt: f64, landed: &[rp::LandedPunch], down: [bool; 2]) -> Option<Bell> {
         if let Stage::Over(_) = self.stage {
             self.clock += dt;
             return None;
         }
-        if let Some((down, knocked_out)) = down {
-            self.stage = Stage::Over(Outcome::Down {
-                down,
-                knocked_out,
-                round: self.round(),
-            });
-            self.clock = 0.0;
-            return Some(Bell::BoutOver);
+        for since in self.hit.iter_mut().flatten() {
+            *since += dt;
         }
-        if let Stage::Round(round) = self.stage {
-            if let Some(tally) = self.clean.last_mut() {
-                for punch in landed.iter().filter(|punch| clean(punch.struck)) {
-                    if let Some(count) = tally.get_mut(punch.by) {
-                        *count += 1;
-                    }
+        for punch in landed.iter().filter(|punch| clean(punch.struck)) {
+            if let Some(since) = self.hit.get_mut(punch.on) {
+                *since = Some(0.0);
+            }
+            if let (Stage::Round(_), Some(tally)) = (self.stage, self.clean.last_mut()) {
+                if let Some(count) = tally.get_mut(punch.by) {
+                    *count += 1;
                 }
             }
+        }
+        // A fighter going down just after a clean punch landed on it is
+        // knocked down, and counted; with none, it slipped.
+        let went_down = (0..2).find(|&fighter| down[fighter] && !self.was_down[fighter]);
+        self.was_down = down;
+        let mut bell = None;
+        if let (None, Some(fighter)) = (self.count, went_down) {
+            let punched = self.hit[fighter].is_some_and(|since| since <= KNOCKED_DOWN_SECONDS);
+            if punched {
+                self.knockdowns[fighter] += 1;
+                if self.knockdowns[fighter] >= KNOCKDOWNS_STOP_IT {
+                    let round = self.round();
+                    return self.end(Outcome::Stopped {
+                        down: fighter,
+                        round,
+                    });
+                }
+                self.count = Some(Count {
+                    down: fighter,
+                    seconds: 0.0,
+                    up: false,
+                });
+                bell = Some(Bell::Knockdown(fighter));
+            }
+        }
+        if let Some(count) = &mut self.count {
+            count.seconds += dt;
+            // Up, or down again with no new punch: the count goes on.
+            count.up = !down[count.down];
+            if count.seconds >= COUNT_OUT && !count.up {
+                let (fighter, round) = (count.down, self.round());
+                return self.end(Outcome::KnockedOut {
+                    down: fighter,
+                    round,
+                });
+            }
+            if count.seconds >= MANDATORY_COUNT && count.up {
+                self.count = None;
+                bell = Some(Bell::Box);
+            }
+        }
+        if let Stage::Round(round) = self.stage {
+            // The round's clock runs on through a count, but its bell waits
+            // for the count to end: the bell saves no one.
             self.clock -= dt;
-            if self.clock <= 0.0 {
+            if self.clock <= 0.0 && self.count.is_none() {
                 if round >= self.rules.rounds {
                     let [left, right] = self.clean();
                     let winner = match left.cmp(&right) {
@@ -169,17 +279,15 @@ impl Bout {
                         std::cmp::Ordering::Less => Some(1),
                         std::cmp::Ordering::Equal => None,
                     };
-                    self.stage = Stage::Over(Outcome::Decision { winner });
-                    self.clock = 0.0;
-                    return Some(Bell::BoutOver);
+                    return self.end(Outcome::Decision { winner });
                 }
                 // What the step ran past the bell goes on into the rest, so
                 // that the bells keep time over a whole bout.
                 self.stage = Stage::Break(round);
-                self.clock += self.rules.break_seconds;
+                self.clock = self.clock.max(-dt) + self.rules.break_seconds;
                 return Some(Bell::RoundOver(round));
             }
-            return None;
+            return bell;
         }
         if let Stage::Break(round) = self.stage {
             self.clock -= dt;
@@ -190,7 +298,7 @@ impl Bout {
                 return Some(Bell::RoundBegins(round + 1));
             }
         }
-        None
+        bell
     }
 }
 
@@ -222,7 +330,7 @@ mod tests {
         let mut bells = Vec::new();
         for step in 0..(seconds / DT).round() as usize {
             let now: &[rp::LandedPunch] = if step == 0 { landed } else { &[] };
-            if let Some(bell) = bout.tick(DT, now, None) {
+            if let Some(bell) = bout.tick(DT, now, [false; 2]) {
                 bells.push((step, bell));
             }
         }
@@ -292,26 +400,117 @@ mod tests {
         );
     }
 
-    /// A fighter going down ends the bout at once, in the round it went
-    /// down in, and nothing changes after.
+    /// Plays `seconds` of `bout` with each fighter `down` or not, a clean
+    /// punch landing on `hit` first if any: every bell it rang, with the
+    /// second it rang at.
+    fn play_down(
+        bout: &mut Bout,
+        seconds: f64,
+        hit: Option<usize>,
+        down: [bool; 2],
+    ) -> Vec<(f64, Bell)> {
+        let mut bells = Vec::new();
+        for step in 0..(seconds / DT).round() as usize {
+            let landed: Vec<rp::LandedPunch> = hit
+                .filter(|_| step == 0)
+                .map(|on| punch(1 - on, rp::Struck::Head))
+                .into_iter()
+                .collect();
+            if let Some(bell) = bout.tick(DT, &landed, down) {
+                bells.push((step as f64 * DT, bell));
+            }
+        }
+        bells
+    }
+
+    /// A fighter knocked down by a punch gets a count, and up by ten it
+    /// fights on once the count has reached eight, though it stood at five;
+    /// the knockdown is counted against it, and the bout goes on.
     #[test]
-    fn going_down_ends_the_bout_at_once() {
+    fn a_fighter_up_by_ten_fights_on_after_a_count_of_eight() {
         let mut bout = Bout::new(Rules::default());
-        play(&mut bout, 75.0, &[]);
-        assert_eq!(bout.tick(DT, &[], Some((1, true))), Some(Bell::BoutOver));
-        let knocked_out = Outcome::Down {
-            down: 1,
-            knocked_out: true,
-            round: 2,
-        };
+        play_down(&mut bout, 5.0, None, [false; 2]);
+        let bells = play_down(&mut bout, 0.5, Some(1), [false, true]);
+        assert_eq!(bells, [(0.0, Bell::Knockdown(1))]);
+        play_down(&mut bout, 4.5, None, [false, true]);
+        assert_eq!(bout.count().map(|count| count.called()), Some(5));
+        let bells = play_down(&mut bout, 4.0, None, [false; 2]);
+        assert!(
+            matches!(bells[..], [(at, Bell::Box)] if (2.9..3.1).contains(&at)),
+            "{bells:?}"
+        );
+        assert_eq!(bout.count(), None);
+        assert_eq!(bout.knockdowns(), [0, 1]);
+        assert_eq!(bout.stage(), Stage::Round(1));
+    }
+
+    /// A fighter still down at the count of ten is knocked out, and the
+    /// bout is over in the round it went down in.
+    #[test]
+    fn still_down_at_ten_is_a_knockout() {
+        let mut bout = Bout::new(Rules::default());
+        play_down(&mut bout, 75.0, None, [false; 2]);
+        let bells = play_down(&mut bout, 12.0, Some(0), [true, false]);
+        assert!(
+            matches!(bells[..], [(0.0, Bell::Knockdown(0)), (at, Bell::BoutOver)] if (9.9..10.1).contains(&at)),
+            "{bells:?}"
+        );
         assert_eq!(
             bout.outcome().map(|(outcome, _)| outcome),
-            Some(knocked_out)
+            Some(Outcome::KnockedOut { down: 0, round: 2 })
         );
-        assert_eq!(bout.tick(DT, &[], Some((0, false))), None);
+    }
+
+    /// A fighter going down with no punch landing on it slipped: no count,
+    /// no knockdown, and the bout goes on as it gets up.
+    #[test]
+    fn a_fall_with_no_punch_is_a_slip() {
+        let mut bout = Bout::new(Rules::default());
+        play_down(&mut bout, 1.0, Some(1), [false; 2]);
+        // A punch long before does not make it a knockdown.
+        play_down(&mut bout, 3.0, None, [false; 2]);
+        let bells = play_down(&mut bout, 6.0, None, [false, true]);
+        assert!(bells.is_empty(), "{bells:?}");
+        assert_eq!(bout.count(), None);
+        assert_eq!(bout.knockdowns(), [0, 0]);
+        play_down(&mut bout, 1.0, None, [false; 2]);
+        assert_eq!(bout.stage(), Stage::Round(1));
+    }
+
+    /// The third knockdown ends the bout at once: the referee stops it.
+    #[test]
+    fn the_third_knockdown_stops_the_bout() {
+        let mut bout = Bout::new(Rules::default());
+        for _ in 0..2 {
+            play_down(&mut bout, 2.0, Some(1), [false, true]);
+            play_down(&mut bout, 7.0, None, [false; 2]);
+            assert_eq!(bout.count(), None);
+        }
+        assert_eq!(bout.knockdowns(), [0, 2]);
+        let bells = play_down(&mut bout, 1.0, Some(1), [false, true]);
+        assert_eq!(bells, [(0.0, Bell::BoutOver)]);
         assert_eq!(
             bout.outcome().map(|(outcome, _)| outcome),
-            Some(knocked_out)
+            Some(Outcome::Stopped { down: 1, round: 1 })
         );
+    }
+
+    /// The bell saves no one: a round that runs out during a count ends once
+    /// the count does, the fighter up.
+    #[test]
+    fn the_bell_does_not_save_a_fighter() {
+        let mut bout = Bout::new(Rules::default());
+        play_down(&mut bout, 57.0, None, [false; 2]);
+        play_down(&mut bout, 6.0, Some(0), [true, false]);
+        assert_eq!(bout.stage(), Stage::Round(1));
+        assert!(bout.count().is_some());
+        // The count ends at eight, and the round's bell rings with it.
+        let bells = play_down(&mut bout, 3.0, None, [false; 2]);
+        assert!(
+            matches!(bells[..], [(at, Bell::RoundOver(1))] if (1.9..2.1).contains(&at)),
+            "{bells:?}"
+        );
+        assert_eq!(bout.stage(), Stage::Break(1));
+        assert_eq!(bout.count(), None);
     }
 }

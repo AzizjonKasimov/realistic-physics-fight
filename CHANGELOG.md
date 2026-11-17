@@ -3,6 +3,13 @@
 Each version of the Fight page, newest first. The page shows the newest
 entry's lines as written.
 
+## v0.5 (2026-11-17)
+
+- A fighter knocked down gets up on its own: from its back it sits up, crouches, and stands; from its front it comes up onto its knees, takes a knee, and stands.
+- A knockdown starts the referee's count while the other fighter waits at its edge of the ring. Up by ten, the fight goes on once the count reaches eight; still down at ten is a knockout.
+- The harder the punch, the longer a fighter stays down: most knockdowns are beaten, the hardest punches still end the fight.
+- Three knockdowns end the fight. A fall with no punch before it is a slip and is not counted.
+
 ## v0.4 (2026-11-17)
 
 - A jab or cross thrown while you hold DUCK goes to the body, under the other fighter's block.

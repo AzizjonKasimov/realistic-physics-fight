@@ -17,7 +17,7 @@ use realistic_physics as rp;
 use rp::draw::{with_alpha, Palette};
 use rp::scenarios::SCENARIO_WIDTH;
 
-use crate::bout::{Outcome, Stage};
+use crate::bout::{self, Count, Outcome, Stage};
 use crate::camera::Camera;
 use crate::controls::{Act, Button, Hold};
 use crate::game::{version_label, Game, LEFT, RIGHT};
@@ -244,8 +244,11 @@ pub fn draw(game: &Game, layout: &Layout, held: &[Button]) {
     rp::draw::draw_body_layers(&scene);
     rp::draw::draw_effects(&scene);
     set_default_camera();
-    // A card between rounds or at the end stands where the tags are.
-    let carded = matches!(game.bout.stage(), Stage::Break(_)) || game.outcome().is_some();
+    // A card between rounds, during a count, or at the end stands where the
+    // tags are.
+    let carded = matches!(game.bout.stage(), Stage::Break(_))
+        || game.bout.count().is_some()
+        || game.outcome().is_some();
     if !carded {
         draw_tags(game, view, &palette);
     }
@@ -259,6 +262,9 @@ pub fn draw(game: &Game, layout: &Layout, held: &[Button]) {
     }
     if let Stage::Break(round) = game.bout.stage() {
         draw_break(game, layout, round, &palette);
+    }
+    if let Some(count) = game.bout.count() {
+        draw_count(game, layout, count, &palette);
     }
     if let Some((outcome, since)) = game.outcome() {
         draw_ending(game, layout, outcome, since, &palette);
@@ -280,9 +286,10 @@ fn right_fighter(game: &Game) -> &'static str {
     }
 }
 
-/// The card that ends a fight: KNOCKOUT, or DOWN for a fighter that fell,
-/// with who won and in which round, or after the last round the DECISION on
-/// clean punches; and how to fight again.
+/// The card that ends a fight: KNOCKOUT for a fighter still down at ten,
+/// STOPPED after a third knockdown, with who won and in which round, or
+/// after the last round the DECISION on clean punches; and how to fight
+/// again.
 fn draw_ending(game: &Game, layout: &Layout, outcome: Outcome, since: f64, palette: &Palette) {
     let shown = (since / ENDING_FADE_SECONDS).min(1.0) as f32;
     let [yours, theirs] = game.bout.clean();
@@ -292,14 +299,15 @@ fn draw_ending(game: &Game, layout: &Layout, outcome: Outcome, since: f64, palet
         None => "A DRAW".to_string(),
     };
     let (title, result, detail) = match outcome {
-        Outcome::Down {
-            down,
-            knocked_out,
-            round,
-        } => (
-            if knocked_out { "KNOCKOUT" } else { "DOWN" },
+        Outcome::KnockedOut { down, round } => (
+            "KNOCKOUT",
             winner(Some(1 - down)),
-            format!("in round {round}"),
+            format!("counted out in round {round}"),
+        ),
+        Outcome::Stopped { down, round } => (
+            "STOPPED",
+            winner(Some(1 - down)),
+            format!("three knockdowns, in round {round}"),
         ),
         Outcome::Decision { winner: fighter } => {
             let (most, least) = (yours.max(theirs), yours.min(theirs));
@@ -326,6 +334,39 @@ fn draw_ending(game: &Game, layout: &Layout, outcome: Outcome, since: f64, palet
         (again, 15.0, palette.hud_muted),
     ];
     draw_card(game, layout, &lines, shown, 0.92, palette);
+}
+
+/// The card while the referee counts over a fighter knocked down: the
+/// count, who is down, and which knockdown it is of the three that end a
+/// fight.
+fn draw_count(game: &Game, layout: &Layout, count: Count, palette: &Palette) {
+    let called = count.called();
+    let number = if called == 0 {
+        "DOWN".to_string()
+    } else {
+        called.to_string()
+    };
+    let who = if count.down == LEFT {
+        "YOU ARE DOWN".to_string()
+    } else {
+        format!("{} IS DOWN", right_fighter(game))
+    };
+    let knockdowns = game.bout.knockdowns()[count.down];
+    let which = format!(
+        "knockdown {knockdowns} of {}{}",
+        bout::KNOCKDOWNS_STOP_IT,
+        if count.up {
+            ", up: the count goes to eight"
+        } else {
+            ""
+        }
+    );
+    let lines = [
+        (number.as_str(), 34.0, palette.tool_accent),
+        (who.as_str(), 18.0, palette.hud_text),
+        (which.as_str(), 15.0, palette.hud_muted),
+    ];
+    draw_card(game, layout, &lines, 1.0, 0.85, palette);
 }
 
 /// The card between two rounds: the round that ended, each fighter's clean

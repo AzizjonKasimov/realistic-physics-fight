@@ -308,6 +308,7 @@ pub async fn run(request: Request) {
             }
         }
         let ended = game.outcome().is_some();
+        let counting = game.bout.count().is_some();
         game.step();
         let side = |fighter: usize| if fighter == LEFT { "left" } else { "right" };
         // Every punch that landed and on what, numbered as the saved frames
@@ -322,22 +323,33 @@ pub async fn run(request: Request) {
                 punch.speed
             );
         }
+        // Each knockdown's count, as it begins and ends.
+        match (counting, game.bout.count()) {
+            (false, Some(count)) => println!(
+                "step {}: the {} fighter was knocked down, knockdown {}; the count begins, the fighters {:.2} body heights apart",
+                frame + 1,
+                side(count.down),
+                game.bout.knockdowns()[count.down],
+                game.apart()
+            ),
+            (true, None) if game.outcome().is_none() => println!(
+                "step {}: the count is over, the fight goes on, the fighters {:.2} body heights apart",
+                frame + 1,
+                game.apart()
+            ),
+            _ => {}
+        }
         if let (false, Some((outcome, _))) = (ended, game.outcome()) {
             // How the fight ended, for scripts that play one to its end.
             let [left, right] = game.bout.clean();
             let how = match outcome {
-                Outcome::Down {
-                    down,
-                    knocked_out,
-                    round,
-                } => format!(
-                    "the {} fighter {} in round {round}",
-                    side(down),
-                    if knocked_out {
-                        "was knocked out"
-                    } else {
-                        "fell"
-                    }
+                Outcome::KnockedOut { down, round } => format!(
+                    "the {} fighter was counted out in round {round}",
+                    side(down)
+                ),
+                Outcome::Stopped { down, round } => format!(
+                    "the {} fighter went down a third time in round {round}, and the referee stopped it",
+                    side(down)
                 ),
                 Outcome::Decision {
                     winner: Some(winner),
