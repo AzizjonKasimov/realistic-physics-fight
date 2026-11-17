@@ -6,8 +6,9 @@ Builds the browser version of the game into target\web.
 Builds the game for WebAssembly and lays out the Fight page beside it: the
 page with the game's version, the engine's, and what is new in this version
 filled in (from Cargo.toml, the engine Cargo pins, and CHANGELOG.md), the
-wasm, and the two scripts that ship in crates, miniquad's loader (gl.js) and
-the engine's patched quad-snd audio plugin (audio.js). The engine's site
+wasm, the two scripts that ship in crates, miniquad's loader (gl.js) and
+the engine's patched quad-snd audio plugin (audio.js), and the page's own
+dualsense.js, which drives a DualSense directly for its rumble. The engine's site
 serves this folder as its /fight/ page, beside the sandbox; the page reaches
 the site's own visit counting, app manifest, and icons one folder up.
 
@@ -93,6 +94,8 @@ foreach ($script in @(@{ Package = "miniquad"; File = "js/gl.js" }, @{ Package =
     if (-not (Test-Path -LiteralPath $path)) { throw "$($script.Package) $($crate.version) does not ship $($script.File)." }
     Copy-Item -LiteralPath $path -Destination $siteDir
 }
+# The page's own script that drives a DualSense directly, for its rumble.
+Copy-Item -LiteralPath (Join-Path $repoRoot "web/dualsense.js") -Destination $siteDir
 
 # A returning visitor's browser may hold the last build's files for a while,
 # so each URL carries its content's hash and every build loads its own.
@@ -107,6 +110,7 @@ $replacements = @(
     @{ From = '<ul class="news"></ul>'; To = "<ul class=`"news`">$news</ul>"; Count = 1 },
     @{ From = 'src="gl.js"'; To = "src=`"gl.js?v=$(Get-Stamp 'gl.js')`""; Count = 1 },
     @{ From = 'src="audio.js"'; To = "src=`"audio.js?v=$(Get-Stamp 'audio.js')`""; Count = 1 },
+    @{ From = 'src="dualsense.js"'; To = "src=`"dualsense.js?v=$(Get-Stamp 'dualsense.js')`""; Count = 1 },
     @{ From = 'load("realistic_physics_fight.wasm")'; To = "load(`"realistic_physics_fight.wasm?v=$(Get-Stamp 'realistic_physics_fight.wasm')`")"; Count = 1 }
 )
 foreach ($replacement in $replacements) {

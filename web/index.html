@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Realistic Physics: Fight</title>
-<meta name="description" content="Two boxers on a realistic injury simulation: step in, jab, cross, punch to the body, block, duck, and lean back against a computer opponent over three rounds, or a friend, and watch skin, muscle and bone respond through real physics. Runs in your browser.">
+<meta name="description" content="Two boxers on a realistic injury simulation: step in, jab, cross, punch to the body, block, duck, and lean back against a computer opponent over three rounds, or a friend, and watch skin, muscle and bone respond through real physics. Runs in your browser, with a keyboard, a touch screen, or a game controller.">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Realistic Physics: Fight">
 <meta property="og:description" content="Box a computer opponent over three rounds and watch skin, muscle and bone respond through real physics. Runs in your browser.">
@@ -122,6 +122,49 @@
     background: rgba(255, 188, 66, 0.12);
   }
   .level input:focus-visible + span { outline: 2px solid var(--text); outline-offset: 2px; }
+  .pads {
+    margin: 12px 0 0;
+    padding: 8px 12px;
+    border-left: 3px solid var(--border);
+    color: var(--muted);
+  }
+  .pads.connected { border-left-color: var(--accent); background: rgba(255, 188, 66, 0.10); color: var(--text); }
+  .pads.offer { margin-top: 6px; border-left-color: var(--accent); color: var(--text); }
+  .pads[hidden], #rumble-offer[hidden] { display: none; }
+  .rumble {
+    margin: 4px 2px 0;
+    padding: 3px 12px;
+    font: inherit;
+    font-weight: 600;
+    color: #1a1305;
+    background: var(--accent);
+    border: none;
+    cursor: pointer;
+  }
+  .rumble:hover, .rumble:focus-visible { filter: brightness(1.1); outline: 2px solid var(--text); outline-offset: 2px; }
+  #rumble-offer {
+    position: fixed;
+    left: 10px;
+    top: 48px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px;
+    font: 13px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: rgba(24, 23, 26, 0.92);
+    border: 1px solid var(--accent);
+  }
+  #rumble-offer .rumble { margin: 0; }
+  #rumble-offer .dismiss {
+    padding: 2px 8px;
+    font: inherit;
+    font-size: 15px;
+    color: var(--muted);
+    background: none;
+    border: none;
+    cursor: pointer;
+  }
+  .pads svg, .controls svg { vertical-align: middle; }
   .controls {
     display: grid;
     grid-template-columns: auto 1fr;
@@ -131,6 +174,11 @@
   }
   .controls dt { color: var(--text); font-weight: 600; white-space: nowrap; }
   .controls dd { margin: 0; }
+  /* A controller's buttons stand beside the keys once one is connected. */
+  .controls .pad, .controls .with-pad { display: none; }
+  .has-pad .controls { grid-template-columns: auto auto 1fr; align-items: center; }
+  .has-pad .controls .pad { display: flex; gap: 4px; align-items: center; }
+  .has-pad .controls .with-pad { display: inline; }
   .about {
     margin: 20px 0 0;
     padding: 16px 0 0;
@@ -200,15 +248,25 @@
       </div>
     </fieldset>
     <button id="start" type="button">Start the fight</button>
+    <!-- Filled in once a game controller is connected: which fighter each
+         plays, and the button that starts the fight. -->
+    <p class="pads" id="pads" aria-live="polite">Controllers work too: press any button on yours.</p>
+    <!-- Shown for a DualSense this browser cannot rumble by itself, which the
+         page can drive directly once the player picks it (dualsense.js). -->
+    <p class="pads offer" id="rumble-card" hidden>Your DualSense can rumble here after one step, done once: <button type="button" class="rumble" id="rumble-card-button">Turn on rumble</button> and pick it in the window your browser opens. <span id="rumble-card-problem"></span></p>
+    <!-- The .pad cells show a connected controller's buttons, drawn for its
+         kind; .with-pad text shows only then. -->
     <dl class="controls">
-      <dt>D / A</dt><dd>Step in toward the other fighter / step back</dd>
-      <dt>W / S</dt><dd>Hold to lean back, so a punch falls short / hold to duck under it; a punch thrown while ducking goes to the body</dd>
-      <dt>J / K</dt><dd>Jab with your front hand / cross with your back hand</dd>
-      <dt>L</dt><dd>Hold to block: your forearms stop punches at your head, which otherwise go between your open hands. Held while ducking, they cover your body and leave your head open</dd>
-      <dt>Arrows , . /</dt><dd>A friend plays the right fighter: the arrows step, lean back, and duck; comma, full stop, and slash jab, cross, and block. Left alone, the computer opponent fights it</dd>
-      <dt>Space / R / M</dt><dd>Pause / start afresh / sound on or off</dd>
-      <dt>Level</dt><dd>The button at the top starts a new fight against the next level of opponent</dd>
-      <dt>Touch</dt><dd>Your moves are buttons: steps, lean back, and duck at the bottom left, jab, cross, and block at the bottom right</dd>
+      <dt>D / A</dt><dt class="pad" data-pad="steps"></dt><dd>Step in toward the other fighter / step back<span class="with-pad">; held on a controller, it keeps stepping</span></dd>
+      <dt>W / S</dt><dt class="pad" data-pad="lean-duck"></dt><dd>Hold to lean back, so a punch falls short / hold to duck under it; a punch thrown while ducking goes to the body</dd>
+      <dt>J / K</dt><dt class="pad" data-pad="punches"></dt><dd>Jab with your front hand / cross with your back hand<span class="with-pad">; <span data-pad-name="faces">square and triangle</span> punch too</span></dd>
+      <dt>L</dt><dt class="pad" data-pad="block"></dt><dd>Hold to block: your forearms stop punches at your head, which otherwise go between your open hands. Held while ducking, they cover your body and leave your head open</dd>
+      <dt>Arrows , . /</dt><dt class="pad" data-pad="switch"></dt><dd>A friend plays the right fighter: the arrows step, lean back, and duck; comma, full stop, and slash jab, cross, and block. <span class="with-pad">A second controller plays it too, and <b data-pad-name="select">CREATE</b> moves a controller to the other fighter. </span>Left alone, the computer opponent fights it</dd>
+      <dt>Space</dt><dt class="pad" data-pad="pause"></dt><dd>Pause</dd>
+      <dt>R</dt><dt class="pad" data-pad="again"></dt><dd>Start afresh<span class="with-pad">; on a controller, the next fight once one is over</span></dd>
+      <dt>M</dt><dt class="pad"></dt><dd>Sound on or off</dd>
+      <dt>Level</dt><dt class="pad"></dt><dd>The button at the top starts a new fight against the next level of opponent</dd>
+      <dt>Touch</dt><dt class="pad"></dt><dd>Your moves are buttons: steps, lean back, and duck at the bottom left, jab, cross, and block at the bottom right</dd>
     </dl>
     <section class="about" aria-labelledby="about-title">
       <h2 id="about-title">About</h2>
@@ -230,11 +288,17 @@
 </div>
 
 <div id="status" role="status" hidden></div>
+<!-- During a fight, the same offer for a DualSense that does not rumble yet,
+     under the game's title. -->
+<div id="rumble-offer" hidden><button type="button" class="rumble" id="rumble-offer-button">Turn on DualSense rumble</button><button type="button" class="dismiss" id="rumble-offer-dismiss" title="Not now" aria-label="Not now">×</button></div>
 <div id="perf" hidden></div>
 <noscript><p style="padding:16px">This game needs JavaScript and WebAssembly enabled.</p></noscript>
 
 <script src="gl.js"></script>
 <script src="audio.js"></script>
+<!-- A DualSense driven directly, for the rumble Chrome and Edge on Windows
+     cannot give it through the Gamepad API. -->
+<script src="dualsense.js"></script>
 <!-- The site's visit counting, shared with the sandbox; its events here are
      named fight-start, fight-loaded, and so on. -->
 <script src="../analytics.js" data-events="fight-"></script>
@@ -309,9 +373,14 @@
       });
     });
 
+    // Game controllers, through the browser's Gamepad API. A browser shows a
+    // controller only after one of its buttons is pressed, and only on a
+    // secure page (HTTPS, or this computer).
+    const pads = gamePads();
+
     miniquad_add_plugin({
       name: "fight",
-      version: 2,
+      version: 3,
       register_plugin: function (importObject) {
         // The game tells the page what players do, each once, for the
         // site's visit counts. Defined here rather than in analytics.js, so
@@ -333,8 +402,122 @@
         importObject.env.fight_level = function () {
           return level;
         };
+        // Each frame the game reads every controller connected: it writes
+        // up to `most` records of 32 bytes at `at` (src/pads.rs, RECORD)
+        // and returns how many.
+        importObject.env.fight_pads = function (at, most) {
+          return pads.write(at, most);
+        };
+        importObject.env.fight_rumble = function (slot, strong, weak, ms) {
+          pads.rumble(slot, strong, weak, ms);
+        };
+        // Which fighter each controller plays, for checks.
+        importObject.env.fight_pads_seen = function (ptr, len) {
+          window.__fightPads = JSON.parse(UTF8ToString(ptr, len));
+        };
       }
     });
+
+    // A DualSense this browser cannot rumble by itself, as Chrome and Edge on
+    // Windows cannot: the page offers to drive it directly (dualsense.js),
+    // which needs the player to pick it once in the browser's window. The
+    // first press of such a DualSense opens that window by itself, once a
+    // visit and on no later visit once the window has been shown (Chrome and
+    // Edge count a controller's press as the player's action, which a page
+    // needs to open it); the start card and, during a fight, a button under
+    // the game's title offer it too.
+    const rumbleOffer = (function () {
+      const direct = window.fightDualSense;
+      const cardOffer = document.getElementById("rumble-card");
+      const cardProblem = document.getElementById("rumble-card-problem");
+      const fightOffer = document.getElementById("rumble-offer");
+      let askedThisVisit = false;
+      let shownBefore = false;
+      try {
+        shownBefore = localStorage.getItem("fight-rumble-asked") === "1";
+      } catch (error) {
+        // Not remembered; the window may open by itself each visit.
+      }
+      let dismissed = false;
+      function wanted(connected) {
+        return Boolean(direct && direct.supported && !direct.any() && !direct.asking()) &&
+          connected.some(function (pad) { return pad.dualSense && !pad.rumble; });
+      }
+      async function ask() {
+        askedThisVisit = true;
+        const result = await direct.request();
+        if (result === "on" || result === "none") {
+          try {
+            localStorage.setItem("fight-rumble-asked", "1");
+          } catch (error) {
+            // Not remembered.
+          }
+        }
+        cardProblem.textContent = result === "failed"
+          ? "The browser did not let the page use the DualSense; try the button again, or plug it in with a cable."
+          : "";
+        if (started) {
+          glCanvas.focus();
+        }
+      }
+      document.getElementById("rumble-card-button").addEventListener("click", ask);
+      document.getElementById("rumble-offer-button").addEventListener("click", ask);
+      document.getElementById("rumble-offer-dismiss").addEventListener("click", function () {
+        dismissed = true;
+        fightOffer.hidden = true;
+        glCanvas.focus();
+      });
+      return {
+        // After a frame's look at the controllers (`connected`, just read
+        // from the browser, which is when it counts a press), on the start
+        // card or during the fight.
+        update: function (connected) {
+          const want = wanted(connected);
+          if (want && !askedThisVisit && !shownBefore && !started &&
+              connected.some(function (pad) { return pad.dualSense && pad.anyDown; })) {
+            ask();
+          }
+          cardOffer.hidden = !want || started;
+          fightOffer.hidden = !want || !started || dismissed;
+        }
+      };
+    })();
+
+    // While the start card shows, it says which controllers are connected
+    // and what each plays, lists their buttons beside the keys, and a
+    // controller's bottom face button (cross, A) starts the fight as the
+    // Start button does. During the fight it only keeps the rumble offer
+    // up to date.
+    (function watchPadsOnTheCard() {
+      const line = document.getElementById("pads");
+      const card = gate.querySelector(".card");
+      let shown = "";
+      let startHeld = true;
+      function look() {
+        const connected = pads.connected();
+        rumbleOffer.update(connected);
+        if (started) {
+          setTimeout(look, 300);
+          return;
+        }
+        const key = connected.map(function (pad) { return pad.index + ":" + pad.kind + ":" + pad.rumble; }).join(",");
+        if (key !== shown) {
+          shown = key;
+          pads.describe(connected, line, card);
+        }
+        // Held as the card came up, or since the last frame, it starts
+        // nothing until let go; nor while the browser's window for picking
+        // a controller is open.
+        const down = connected.some(function (pad) { return pad.bottomDown; });
+        const asking = Boolean(window.fightDualSense && window.fightDualSense.asking());
+        if (down && !startHeld && !asking) {
+          startButton.click();
+        }
+        startHeld = down;
+        requestAnimationFrame(look);
+      }
+      requestAnimationFrame(look);
+    })();
 
     startButton.addEventListener("click", function () {
       if (started) {
@@ -357,6 +540,341 @@
         }
       }, 100);
     });
+
+    // The game controllers connected, through the browser's Gamepad API:
+    // what kind each is, from the name the browser gives it; its buttons and
+    // sticks for the game each frame; its rumble; and the start card's words
+    // and pictures for them.
+    function gamePads() {
+      // The kinds the game draws buttons for (src/pads.rs, PadKind): 1
+      // PlayStation, 2 Xbox, 3 any other. Browsers name a controller in
+      // their own ways: Chrome "DualSense Wireless Controller (STANDARD
+      // GAMEPAD Vendor: 054c Product: 0ce6)", Firefox "054c-0ce6-DualSense
+      // Wireless Controller", Chrome on Windows "Xbox 360 Controller (XInput
+      // STANDARD GAMEPAD)" for any Xbox-style controller. 054c is Sony's
+      // vendor number and 045e Microsoft's.
+      function kindOf(id) {
+        const name = String(id).toLowerCase();
+        if (/xbox|xinput|045e/.test(name)) {
+          return 2;
+        }
+        if (/054c|dualsense|dualshock|playstation/.test(name)) {
+          return 1;
+        }
+        return 3;
+      }
+      function nameOf(id, kind) {
+        const name = String(id).toLowerCase();
+        if (kind === 1) {
+          if (/dualsense|0ce6|0df2/.test(name)) {
+            return "DualSense";
+          }
+          if (/dualshock|05c4|09cc/.test(name)) {
+            return "DualShock 4";
+          }
+          return "PlayStation controller";
+        }
+        return kind === 2 ? "Xbox controller" : "Controller";
+      }
+      // The names printed on each kind's buttons, and its two face buttons
+      // that punch too.
+      const NAMES = {
+        1: { start: "OPTIONS", select: "CREATE", jab: "L2", cross: "R2", block: ["R1", "L1"], faces: "square and triangle" },
+        2: { start: "MENU", select: "VIEW", jab: "LT", cross: "RT", block: ["RB", "LB"], faces: "X and Y" },
+        3: { start: "START", select: "SELECT", jab: "L2", cross: "R2", block: ["R1", "L1"], faces: "the left and top face buttons" }
+      };
+
+      // The DualSenses the page drives itself for their rumble
+      // (dualsense.js), once one is allowed.
+      const direct = window.fightDualSense;
+      function directPads() {
+        return direct ? direct.pads() : [];
+      }
+
+      // The controllers the browser shows now. Once the page drives a
+      // DualSense itself, the Gamepad API's DualSenses are left out: over
+      // Bluetooth they stop reporting their buttons to it.
+      function read() {
+        let list = [];
+        try {
+          list = navigator.getGamepads ? Array.from(navigator.getGamepads() || []) : [];
+        } catch (error) {
+          // A page that may not use them, not served securely, reads none.
+        }
+        const hideDualSenses = Boolean(direct && direct.any());
+        return list.filter(function (pad) {
+          return pad && pad.connected !== false && !(hideDualSenses && direct.isDualSenseName(pad.id));
+        });
+      }
+      function buttonDown(pad, index) {
+        const button = pad.buttons[index];
+        if (button === undefined || button === null) {
+          return false;
+        }
+        if (typeof button !== "object") {
+          return button > 0.5;
+        }
+        return button.pressed || button.value > 0.5;
+      }
+      // How far a button is pressed, from 0 to 1: the triggers' pull.
+      function pull(pad, index) {
+        const button = pad.buttons[index];
+        if (button === undefined || button === null) {
+          return 0;
+        }
+        return Number(typeof button === "object" ? button.value : button) || 0;
+      }
+      // Whether this browser can rumble the controller: Chrome and Edge on
+      // Windows rumble an Xbox controller and a DualShock 4, but not a
+      // DualSense (Chromium's raw input reader rumbles only the DualShock 4
+      // among Sony's controllers).
+      function canRumble(pad) {
+        return Boolean((pad.vibrationActuator && pad.vibrationActuator.playEffect) ||
+          (pad.hapticActuators && pad.hapticActuators.length > 0));
+      }
+
+      // For the game each frame: a record of 32 bytes for each controller at
+      // `at` in the game's memory, at most `most`: its slot, its kind, 1 for
+      // the standard layout, a spare byte, its buttons down as bits, its
+      // first four axes, and how far its two triggers are pulled
+      // (src/pads.rs, Pad::from_record).
+      let buttonsDown = 0;
+      let lastActive = -Infinity;
+      function write(at, most) {
+        // Each controller as the game reads it: the Gamepad API's, then the
+        // DualSenses the page drives itself, already in the standard layout.
+        const records = read().map(function (pad) {
+          let bits = 0;
+          for (let index = 0; index < Math.min(pad.buttons.length, 32); index++) {
+            if (buttonDown(pad, index)) {
+              bits |= 1 << index;
+            }
+          }
+          return {
+            slot: pad.index, kind: kindOf(pad.id), standard: pad.mapping === "standard", buttons: bits >>> 0,
+            axes: [0, 1, 2, 3].map(function (axis) { return Number(pad.axes[axis]) || 0; }),
+            triggers: [pull(pad, 6), pull(pad, 7)]
+          };
+        }).concat(directPads().map(function (pad) {
+          return { slot: pad.slot, kind: 1, standard: true, buttons: pad.buttons, axes: pad.axes, triggers: pad.triggers };
+        }));
+        const memory = new DataView(wasm_memory.buffer);
+        let count = 0;
+        let downs = 0;
+        let moved = false;
+        for (const pad of records) {
+          if (count >= most) {
+            break;
+          }
+          const record = at + count * 32;
+          memory.setUint8(record, pad.slot & 255);
+          memory.setUint8(record + 1, pad.kind);
+          memory.setUint8(record + 2, pad.standard ? 1 : 0);
+          memory.setUint8(record + 3, 0);
+          memory.setUint32(record + 4, pad.buttons, true);
+          pad.axes.forEach(function (value, axis) {
+            memory.setFloat32(record + 8 + axis * 4, value, true);
+            moved = moved || Math.abs(value) > 0.5;
+          });
+          memory.setFloat32(record + 24, pad.triggers[0], true);
+          memory.setFloat32(record + 28, pad.triggers[1], true);
+          for (let bits = pad.buttons; bits; bits &= bits - 1) {
+            downs += 1;
+          }
+          count += 1;
+        }
+        inUse(downs > 0 || moved, downs > buttonsDown);
+        buttonsDown = downs;
+        return count;
+      }
+
+      // A controller in use keeps the site's play time counting, as keys and
+      // fingers do (analytics.js). A new press may also switch the sound on:
+      // Chrome and Edge count a controller's press as a gesture, which lets a
+      // page start its sound; other browsers wait for a click, a tap, or a
+      // key.
+      function inUse(active, newPress) {
+        const now = performance.now();
+        if (active && now - lastActive > 1000) {
+          lastActive = now;
+          if (window.rpAnalytics && window.rpAnalytics.active) {
+            window.rpAnalytics.active();
+          }
+        }
+        if (newPress && typeof audio_context !== "undefined" && audio_context &&
+            audio_context.state !== "running" && navigator.userActivation &&
+            navigator.userActivation.isActive) {
+          audio_context.resume();
+        }
+      }
+
+      // Rumbles the controller in `slot`, both motors from 0 to 1, for `ms`
+      // milliseconds, where the browser can: a DualSense the page drives
+      // itself through its own reports (dualsense.js), others in Chrome and
+      // Edge through vibrationActuator, in Firefox on some systems through
+      // hapticActuators, in Safari not at all. A rumble that comes while a
+      // stronger one plays keeps the stronger's strength and end: each new
+      // effect replaces the last.
+      const rumbling = {};
+      function rumble(slot, strong, weak, ms) {
+        if (direct && direct.rumble(slot, strong, weak, ms)) {
+          return;
+        }
+        const pad = read().find(function (each) { return each.index === slot; });
+        if (!pad) {
+          return;
+        }
+        const now = performance.now();
+        const playing = rumbling[slot];
+        let until = now + ms;
+        if (playing && now < playing.until) {
+          strong = Math.max(strong, playing.strong);
+          weak = Math.max(weak, playing.weak);
+          until = Math.max(until, playing.until);
+        }
+        rumbling[slot] = { strong: strong, weak: weak, until: until };
+        try {
+          let done = null;
+          if (pad.vibrationActuator && pad.vibrationActuator.playEffect) {
+            done = pad.vibrationActuator.playEffect("dual-rumble", {
+              startDelay: 0, duration: Math.round(until - now), strongMagnitude: strong, weakMagnitude: weak
+            });
+          } else if (pad.hapticActuators && pad.hapticActuators.length > 0) {
+            done = pad.hapticActuators[0].pulse(Math.max(strong, weak), Math.round(until - now));
+          }
+          if (done && done.catch) {
+            done.catch(function () {});
+          }
+        } catch (error) {
+          // This controller or browser does not rumble.
+        }
+      }
+
+      // The controllers connected, for the start card, in the order the game
+      // gives them fighters: whether the bottom face button (cross, A) is
+      // down, which a Sony controller in its own order has second.
+      function connected() {
+        return read().map(function (pad) {
+          const kind = kindOf(pad.id);
+          const bottom = pad.mapping !== "standard" && kind === 1 ? 1 : 0;
+          return {
+            index: pad.index, kind: kind, name: nameOf(pad.id, kind),
+            bottomDown: buttonDown(pad, bottom), rumble: canRumble(pad),
+            anyDown: pad.buttons.some(function (button, index) { return buttonDown(pad, index); }),
+            dualSense: Boolean(direct && direct.isDualSenseName(pad.id)), direct: false
+          };
+        }).concat(directPads().map(function (pad) {
+          return {
+            index: pad.slot, kind: 1, name: pad.device.productId === 0x0df2 ? "DualSense Edge" : "DualSense",
+            bottomDown: (pad.buttons & 1) !== 0, rumble: true, anyDown: pad.buttons !== 0,
+            dualSense: true, direct: true
+          };
+        })).sort(function (a, b) { return a.index - b.index; });
+      }
+
+      // The buttons as small pictures, drawn as the game draws them
+      // (src/glyphs.rs).
+      const SIGNS = {
+        left: ["square", '<rect x="7" y="7" width="10" height="10" fill="none" stroke="#e597d2" stroke-width="2"/>'],
+        top: ["triangle", '<polygon points="12,6 18,16.5 6,16.5" fill="none" stroke="#40c9a2" stroke-width="2" stroke-linejoin="round"/>'],
+        right: ["circle", '<circle cx="12" cy="12" r="5.5" fill="none" stroke="#ff6f6f" stroke-width="2"/>'],
+        bottom: ["cross", '<path d="M7.5 7.5 L16.5 16.5 M16.5 7.5 L7.5 16.5" stroke="#86b7ff" stroke-width="2.2" stroke-linecap="round"/>']
+      };
+      const LETTERS = {
+        left: ["X", "#3b82e0", "#fff"],
+        top: ["Y", "#f0c419", "#1b1b1b"],
+        right: ["B", "#e3423a", "#fff"],
+        bottom: ["A", "#5dc21e", "#fff"]
+      };
+      function svg(label, width, body) {
+        return '<svg role="img" aria-label="' + label + '" width="' + width + '" height="24" viewBox="0 0 ' + width + ' 24">' + body + "</svg>";
+      }
+      function face(kind, where) {
+        if (kind === 1) {
+          const [label, sign] = SIGNS[where];
+          return svg(label, 24, '<circle cx="12" cy="12" r="11" fill="#26252a" stroke="#6d655d"/>' + sign);
+        }
+        if (kind === 2) {
+          const [letter, fill, ink] = LETTERS[where];
+          return svg(letter, 24, '<circle cx="12" cy="12" r="11" fill="' + fill + '"/><text x="12" y="16.6" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-weight="700" font-size="13" fill="' + ink + '">' + letter + "</text>");
+        }
+        const at = { top: [12, 5], left: [5, 12], right: [19, 12], bottom: [12, 19] };
+        let dots = "";
+        for (const name of Object.keys(at)) {
+          const lit = name === where;
+          dots += '<circle cx="' + at[name][0] + '" cy="' + at[name][1] + '" r="3.2" fill="' + (lit ? "#ffbc42" : "none") + '" stroke="' + (lit ? "#ffbc42" : "#8a8178") + '" stroke-width="1.3"/>';
+        }
+        return svg(where + " button", 24, dots);
+      }
+      function dpad(lit) {
+        const arms = { up: "M9 1h6v7h-6z", down: "M9 16h6v7h-6z", left: "M1 9h7v6h-7z", right: "M16 9h7v6h-7z" };
+        let body = '<path d="M8 8h8v8h-8z" fill="#3a3733"/>';
+        for (const name of Object.keys(arms)) {
+          body += '<path d="' + arms[name] + '" fill="' + (lit.includes(name) ? "#ffbc42" : "#3a3733") + '" stroke="#8a8178" stroke-width="0.6"/>';
+        }
+        return svg("D-pad or left stick " + lit.join(" and "), 24, body);
+      }
+      function pill(text) {
+        const width = 14 + text.length * 8;
+        return svg(text, width, '<rect x="0.5" y="2.5" width="' + (width - 1) + '" height="19" rx="6" fill="#26252a" stroke="#8a8178"/><text x="' + width / 2 + '" y="16.2" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-weight="700" font-size="11.5" fill="#e8e2d4">' + text + "</text>");
+      }
+
+      // The start card's line about the controllers, and their buttons
+      // beside the keys, drawn for the first controller's kind.
+      function describe(list, line, card) {
+        card.classList.toggle("has-pad", list.length > 0);
+        line.classList.toggle("connected", list.length > 0);
+        if (list.length === 0) {
+          line.textContent = "Controllers work too: press any button on yours.";
+          return;
+        }
+        const first = list[0];
+        let who;
+        if (list.length === 1) {
+          who = first.name + " connected: it plays your fighter, the left one.";
+        } else if (list[1].name === first.name) {
+          who = "The first " + first.name + " plays your fighter, the left one, and the second the right fighter.";
+        } else {
+          who = first.name + " plays your fighter, the left one, and the " + list[1].name.replace(/^Controller$/, "other controller") + " the right fighter.";
+        }
+        line.innerHTML = "";
+        line.append(who + " ");
+        const start = document.createElement("span");
+        start.innerHTML = face(first.kind, "bottom");
+        line.append(start, " starts the fight.");
+        // A DualSense the browser cannot rumble the page can drive itself,
+        // once the player picks it (the offer below the line, rumbleOffer);
+        // another the browser cannot rumble is named.
+        const silent = list.filter(function (pad) { return !pad.rumble; });
+        const others = silent.filter(function (pad) { return !(pad.dualSense && direct && direct.supported); });
+        if (others.length > 0) {
+          line.append(" " + (others.length === list.length && list.length === 1
+            ? "This browser cannot make it rumble."
+            : "This browser cannot make the " + others.map(function (pad) { return pad.name; }).join(" or the ") + " rumble."));
+        }
+        if (silent.length === 0 && list.some(function (pad) { return pad.direct; })) {
+          line.append(" Rumble is on.");
+        }
+        const names = NAMES[first.kind];
+        const cells = {
+          steps: dpad(["left", "right"]),
+          "lean-duck": dpad(["up", "down"]),
+          punches: pill(names.jab) + pill(names.cross),
+          block: pill(names.block[0]) + pill(names.block[1]),
+          switch: pill(names.select),
+          pause: pill(names.start),
+          again: face(first.kind, "bottom")
+        };
+        card.querySelectorAll(".controls .pad[data-pad]").forEach(function (cell) {
+          cell.innerHTML = cells[cell.dataset.pad] || "";
+        });
+        card.querySelectorAll("[data-pad-name]").forEach(function (word) {
+          word.textContent = names[word.dataset.padName];
+        });
+      }
+
+      return { write: write, rumble: rumble, connected: connected, describe: describe };
+    }
 
     function installPerfOverlay() {
       const perf = document.getElementById("perf");

@@ -20,6 +20,8 @@
 //!                   whole bout
 //! --touch           draw the buttons as on a touch screen
 //! --sandbox         show the Sandbox button, as the browser version does
+//! --pad KIND        show a game controller's buttons, as when the player
+//!                   uses one: playstation, xbox, or other
 //! ```
 //!
 //! Script steps: `wait=N` lets N steps pass. A fighter's move is its name
@@ -54,8 +56,9 @@ use macroquad::prelude::*;
 use crate::bout::{Outcome, Rules};
 use crate::controls::{Act, Button, Hold};
 use crate::game::{Game, LEFT, RIGHT};
-use crate::hud::{self, Layout};
+use crate::hud::{self, Layout, Prompts};
 use crate::opponent::Level;
+use crate::pads::PadKind;
 use crate::page::button_name;
 
 /// A capture asked for on the command line.
@@ -69,6 +72,8 @@ pub struct Request {
     rules: Rules,
     touch: bool,
     sandbox: bool,
+    /// The game controller whose buttons the screen shows, if any.
+    pad: Option<PadKind>,
 }
 
 /// One step of a capture's script.
@@ -128,6 +133,16 @@ pub fn request() -> Option<Request> {
                 .unwrap_or_else(|| fail(&format!("{name} wants seconds, not `{text}`")))
         })
     };
+    let pad = value(&args, "--pad").map(|name| {
+        PadKind::ALL
+            .into_iter()
+            .find(|kind| kind.name() == name)
+            .unwrap_or_else(|| {
+                fail(&format!(
+                    "--pad wants playstation, xbox, or other, not `{name}`"
+                ))
+            })
+    });
     let defaults = Rules::default();
     let rules = Rules {
         rounds: number("--rounds").map_or(defaults.rounds, |rounds| rounds.max(1) as u32),
@@ -144,6 +159,7 @@ pub fn request() -> Option<Request> {
         rules,
         touch: args.iter().any(|arg| arg == "--touch"),
         sandbox: args.iter().any(|arg| arg == "--sandbox"),
+        pad,
     })
 }
 
@@ -380,6 +396,10 @@ async fn save(game: &Game, request: &Request, held: &[Button], step: Option<usiz
         screen_height(),
         request.touch,
         request.sandbox,
+        Prompts {
+            left: request.pad,
+            connected: request.pad,
+        },
     );
     hud::draw(game, &layout, held);
     next_frame().await;

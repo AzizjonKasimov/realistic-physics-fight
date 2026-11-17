@@ -2,7 +2,7 @@
 name = "realistic_physics_fight"
 # The version players see on the Fight page and in the game; CHANGELOG.md
 # lists what each one changed.
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 license-file = "LICENSE"
 publish = false

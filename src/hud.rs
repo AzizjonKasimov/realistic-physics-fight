@@ -4,11 +4,13 @@
 //! fighter saying who plays it, and the left fighter's moves as buttons
 //! along the bottom, sized for fingers on a touch screen: its steps, its
 //! lean back, and its duck at the left, under a left thumb, and its jab, its
-//! cross, and its block at the right, under a right thumb. A second player's
-//! keys are written between them. Between rounds a card gives the score,
-//! and once the fight is over a card says how it ended and who won.
-//! The fighters are drawn by the engine (`rp::draw`), as large as fits
-//! between the two rows with the room the camera leaves them (`camera.rs`).
+//! cross, and its block at the right, under a right thumb. Each button shows
+//! the key that makes its move, or once the player uses a game controller
+//! the controller's own button (`glyphs.rs`). A second player's keys are
+//! written between them. Between rounds a card gives the score, and once
+//! the fight is over a card says how it ended and who won. The fighters are
+//! drawn by the engine (`rp::draw`), as large as fits between the two rows
+//! with the room the camera leaves them (`camera.rs`).
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -21,7 +23,9 @@ use crate::bout::{self, Count, Outcome, Stage};
 use crate::camera::Camera;
 use crate::controls::{Act, Button, Hold};
 use crate::game::{version_label, Game, LEFT, RIGHT};
+use crate::glyphs::{self, Face, Glyph, Way};
 use crate::opponent::Level;
+use crate::pads::PadKind;
 
 /// The computer opponent's colour, on its tag and its count: a light red,
 /// against the player's orange.
@@ -54,6 +58,15 @@ fn fighters_between(height: f32, touch: bool) -> (f32, f32) {
     )
 }
 
+/// Whose buttons the screen shows: the kind of game controller the left
+/// fighter's player uses, if they use one, on its buttons and in its texts;
+/// and the kind of any controller connected, for the second player's.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Prompts {
+    pub left: Option<PadKind>,
+    pub connected: Option<PadKind>,
+}
+
 /// Where everything around the fighters sits in a window.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Layout {
@@ -68,12 +81,13 @@ pub struct Layout {
     pub touch: bool,
     /// The window is too narrow for the buttons' longer labels.
     pub narrow: bool,
+    pub prompts: Prompts,
 }
 
 impl Layout {
     /// The layout of a window `width` by `height`, with a Sandbox button
-    /// where there is a sandbox to go back to.
-    pub fn new(width: f32, height: f32, touch: bool, sandbox: bool) -> Layout {
+    /// where there is a sandbox to go back to, showing `prompts`' buttons.
+    pub fn new(width: f32, height: f32, touch: bool, sandbox: bool, prompts: Prompts) -> Layout {
         let narrow = width < NARROW_WIDTH;
         let mut buttons = Vec::new();
         // Along the top, right to left.
@@ -98,6 +112,7 @@ impl Layout {
                 false,
                 false,
                 Level::Normal,
+                prompts.left,
             ));
             x -= w;
             buttons.push((button, Rect::new(x, MARGIN, w, CHIP_HEIGHT)));
@@ -113,6 +128,7 @@ impl Layout {
             buttons,
             touch,
             narrow,
+            prompts,
         }
     }
 
@@ -130,6 +146,7 @@ impl Layout {
             buttons: fighter_buttons(width, bottom, touch),
             touch,
             narrow: width < NARROW_WIDTH,
+            prompts: Prompts::default(),
         }
     }
 
@@ -319,8 +336,15 @@ fn draw_ending(game: &Game, layout: &Layout, outcome: Outcome, since: f64, palet
             ("DECISION", winner(fighter), detail)
         }
     };
-    // Named as the restart button along the top says it.
-    let again = if !layout.touch {
+    // Named as the restart button along the top says it, or as the
+    // controller's button that starts the next fight.
+    let pad_again = layout
+        .prompts
+        .left
+        .map(|kind| Glyph::Face(kind, Face::Bottom));
+    let again = if pad_again.is_some() {
+        "Press \u{1} to fight again"
+    } else if !layout.touch {
         "Press R to fight again"
     } else if layout.narrow {
         "Tap R to fight again"
@@ -333,7 +357,7 @@ fn draw_ending(game: &Game, layout: &Layout, outcome: Outcome, since: f64, palet
         (detail.as_str(), 16.0, palette.hud_text),
         (again, 15.0, palette.hud_muted),
     ];
-    draw_card(game, layout, &lines, shown, 0.92, palette);
+    draw_card(game, layout, &lines, shown, 0.92, palette, pad_again);
 }
 
 /// The card while the referee counts over a fighter knocked down: the
@@ -366,7 +390,7 @@ fn draw_count(game: &Game, layout: &Layout, count: Count, palette: &Palette) {
         (who.as_str(), 18.0, palette.hud_text),
         (which.as_str(), 15.0, palette.hud_muted),
     ];
-    draw_card(game, layout, &lines, 1.0, 0.85, palette);
+    draw_card(game, layout, &lines, 1.0, 0.85, palette, None);
 }
 
 /// The card between two rounds: the round that ended, each fighter's clean
@@ -390,14 +414,24 @@ fn draw_break(game: &Game, layout: &Layout, round: u32, palette: &Palette) {
         (score.as_str(), 16.0, palette.hud_text),
         (next.as_str(), 15.0, palette.hud_muted),
     ];
-    draw_card(game, layout, &lines, 1.0, 0.85, palette);
+    draw_card(game, layout, &lines, 1.0, 0.85, palette, None);
+}
+
+/// Where a card's line shows a controller's button (`draw_card`).
+const GLYPH_MARK: char = '\u{1}';
+
+/// A card line's text before and after the controller's button it shows,
+/// if it shows one.
+fn split_at_glyph(text: &str, glyph: Option<Glyph>) -> Option<(&str, Glyph, &str)> {
+    let (before, after) = text.split_once(GLYPH_MARK)?;
+    Some((before, glyph?, after))
 }
 
 /// A card of `lines`, each a text, its size, and its colour, shown as far
-/// as `shown` from 0 to 1, its back `back` opaque. It stands in the room
-/// above the fighters where there is room for it, as on a phone held
-/// upright, and otherwise over the top of the fight, clear of a fighter
-/// lying on the floor.
+/// as `shown` from 0 to 1, its back `back` opaque; `glyph` is drawn where a
+/// line's text has [`GLYPH_MARK`]. It stands in the room above the fighters
+/// where there is room for it, as on a phone held upright, and otherwise
+/// over the top of the fight, clear of a fighter lying on the floor.
 fn draw_card(
     game: &Game,
     layout: &Layout,
@@ -405,6 +439,7 @@ fn draw_card(
     shown: f32,
     back: f32,
     palette: &Palette,
+    glyph: Option<Glyph>,
 ) {
     // A wider gap under the title than between the lines under it.
     let gap = |line: usize| match line {
@@ -412,9 +447,18 @@ fn draw_card(
         1 => 14.0,
         _ => 9.0,
     };
+    let measure = |text: &str, size: f32| measure_text(text, None, size as u16, 1.0).width;
+    // A controller's button stands a little taller than the line's letters.
+    let glyph_size = |size: f32| size * 1.25;
+    let line_width = |text: &str, size: f32| match split_at_glyph(text, glyph) {
+        Some((before, glyph, after)) => {
+            measure(before, size) + glyph.width(glyph_size(size)) + measure(after, size)
+        }
+        None => measure(text, size),
+    };
     let widest = lines
         .iter()
-        .map(|&(text, size, _)| measure_text(text, None, size as u16, 1.0).width)
+        .map(|&(text, size, _)| line_width(text, size))
         .fold(0.0, f32::max);
     let (pad_x, pad_y) = (26.0, 12.0);
     let tall = lines
@@ -446,14 +490,25 @@ fn draw_card(
     let mut baseline = y + pad_y;
     for (line, &(text, size, colour)) in lines.iter().enumerate() {
         baseline += gap(line) + size;
-        let measure = measure_text(text, None, size as u16, 1.0);
-        draw_text(
-            text,
-            (layout.width - measure.width) * 0.5,
-            baseline - size * 0.2,
-            size,
-            with_alpha(colour, shown * colour.a),
-        );
+        let left = (layout.width - line_width(text, size)) * 0.5;
+        let colour = with_alpha(colour, shown * colour.a);
+        match split_at_glyph(text, glyph) {
+            Some((before, glyph, after)) => {
+                let wide = glyph.width(glyph_size(size));
+                draw_text(before, left, baseline - size * 0.2, size, colour);
+                let at = left + measure(before, size);
+                glyph.draw(
+                    at + wide * 0.5,
+                    baseline - size * 0.55,
+                    glyph_size(size),
+                    palette,
+                );
+                draw_text(after, at + wide, baseline - size * 0.2, size, colour);
+            }
+            None => {
+                draw_text(text, left, baseline - size * 0.2, size, colour);
+            }
+        }
     }
 }
 
@@ -703,6 +758,37 @@ fn fighter_label(button: Button, narrow: bool) -> (&'static str, &'static str, O
     }
 }
 
+/// The button of a game controller of `kind` that makes a fighter's move:
+/// the D-pad's way for a step (toward the other fighter is right for the
+/// left fighter), a lean back (up), or a duck (down); the left trigger for a
+/// jab, the right one for a cross, and the right shoulder for a block.
+fn fighter_glyph(button: Button, kind: PadKind) -> Option<Glyph> {
+    let toward = |fighter: usize| {
+        if fighter == LEFT {
+            Way::Right
+        } else {
+            Way::Left
+        }
+    };
+    let away = |fighter: usize| {
+        if fighter == LEFT {
+            Way::Left
+        } else {
+            Way::Right
+        }
+    };
+    Some(match button {
+        Button::Act(fighter, Act::StepIn) => Glyph::DPad(toward(fighter)),
+        Button::Act(fighter, Act::StepOut) => Glyph::DPad(away(fighter)),
+        Button::Hold(_, Hold::Lean) => Glyph::DPad(Way::Up),
+        Button::Hold(_, Hold::Duck) => Glyph::DPad(Way::Down),
+        Button::Act(_, Act::Jab) => Glyph::Named(kind.jab_name()),
+        Button::Act(_, Act::Cross) => Glyph::Named(kind.cross_name()),
+        Button::Hold(_, Hold::Block) => Glyph::Named(kind.block_name()),
+        _ => return None,
+    })
+}
+
 fn draw_button(
     game: &Game,
     layout: &Layout,
@@ -723,6 +809,7 @@ fn draw_button(
                 game.muted,
                 !game.running,
                 game.level(),
+                layout.prompts.left,
             );
             // Once the fight is over, restart is what to press next.
             let accent = if button == Button::Restart && game.outcome().is_some() {
@@ -756,8 +843,21 @@ fn draw_button(
     let measure = measure_text(title, None, size as u16, 1.0);
     let arrow = if toward.is_some() { size * 0.55 } else { 0.0 };
     let gap = if toward.is_some() { 6.0 } else { 0.0 };
-    let show_keys = !layout.touch;
-    let middle = rect.y + (rect.h - if show_keys { 24.0 } else { 0.0 }) * 0.5;
+    // Under the name, the controller's button that makes the move while the
+    // player uses one, else the key, except on a touch screen.
+    let glyph = layout
+        .prompts
+        .left
+        .and_then(|kind| fighter_glyph(button, kind));
+    let show_keys = glyph.is_none() && !layout.touch;
+    let middle = rect.y
+        + (rect.h
+            - if show_keys || glyph.is_some() {
+                24.0
+            } else {
+                0.0
+            })
+            * 0.5;
     let width = measure.width + gap + arrow;
     let left = rect.x + (rect.w - width) * 0.5;
     // A step's arrow points the way the fighter goes, on that side of its
@@ -771,6 +871,15 @@ fn draw_button(
     draw_text(title, text_x, middle + size * 0.32, size, palette.hud_text);
     if toward.is_some() {
         draw_arrow(arrow_x, middle, arrow, right, palette.hud_text);
+    }
+    if let Some(glyph) = glyph {
+        // Where the key cap's middle would be.
+        glyph.draw(
+            rect.x + rect.w * 0.5,
+            rect.y + rect.h - 14.0,
+            glyphs::SIZE,
+            palette,
+        );
     }
     if show_keys {
         // The key that makes the move, on a key cap of its own, so a
@@ -818,11 +927,17 @@ fn draw_second_players_keys(layout: &Layout, palette: &Palette) {
         return;
     };
     let (from, to) = (step_in.x + step_in.w, jab.x);
-    let lines = [
+    let switch;
+    let mut lines = vec![
         "PLAYER 2 PLAYS THE RIGHT FIGHTER",
         "ARROWS  step, lean back, duck",
         ",  jab     .  cross     /  block",
     ];
+    // With a game controller connected, a second one plays it too.
+    if let Some(kind) = layout.prompts.connected {
+        switch = format!("{}  switches a controller's fighter", kind.switch_name());
+        lines.extend(["or a second controller", switch.as_str()]);
+    }
     let size = 13.0;
     let widest = lines
         .iter()
@@ -831,7 +946,7 @@ fn draw_second_players_keys(layout: &Layout, palette: &Palette) {
     if to - from < widest + 24.0 {
         return;
     }
-    let top = jab.y + (jab.h - 3.0 * (size + 5.0)) * 0.5;
+    let top = jab.y + (jab.h - lines.len() as f32 * (size + 5.0)) * 0.5;
     for (row, line) in lines.iter().enumerate() {
         let measure = measure_text(line, None, size as u16, 1.0);
         draw_text(
@@ -858,7 +973,9 @@ fn draw_arrow(x: f32, y: f32, size: f32, right: bool, color: Color) {
 
 /// The label of a button along the top: its key and what it does, what it
 /// does alone on a touch screen, which has no keys, or on a narrow window, a
-/// short sign. The game's font has no arrows. The level's button says the
+/// short sign. While the player uses a game controller (`pad`), pausing
+/// names the controller's button for it, and the rest say only what they
+/// do. The game's font has no arrows. The level's button says the
 /// opponent's level, and a press goes on to the next.
 fn top_label(
     button: Button,
@@ -867,12 +984,20 @@ fn top_label(
     muted: bool,
     paused: bool,
     level: Level,
+    pad: Option<PadKind>,
 ) -> String {
     if button == Button::Level {
         return if narrow {
             level.name().to_string()
         } else {
             format!("level  {}", level.name())
+        };
+    }
+    if let (Some(kind), false) = (pad, narrow) {
+        return match button {
+            Button::Pause if paused => format!("{}  go on", kind.pause_name()),
+            Button::Pause => format!("{}  pause", kind.pause_name()),
+            _ => top_label(button, narrow, true, muted, paused, level, None),
         };
     }
     let (short, keyed, plain) = match button {

@@ -17,15 +17,18 @@ mod camera;
 mod capture;
 mod controls;
 mod game;
+mod glyphs;
 mod hud;
 mod opponent;
+mod pads;
 mod page;
 #[cfg(test)]
 mod trial;
 
 use controls::{Act, Controls, Hold, Intents};
 use game::{Game, LEFT, RIGHT};
-use hud::Layout;
+use hud::{Layout, Prompts};
+use page::Moment;
 
 fn window_conf() -> Conf {
     #[cfg(not(target_arch = "wasm32"))]
@@ -67,24 +70,40 @@ async fn run() {
     let mut controls = Controls::default();
     let mut sound = rp::sound::Player::start();
     let mut shown: Option<Layout> = None;
+    let mut pads_shown = None;
     loop {
         let dt = get_frame_time().min(0.05) as f64;
+        let prompts = Prompts {
+            left: controls.prompts,
+            connected: controls.connected_kind(),
+        };
         let layout = Layout::new(
             screen_width(),
             screen_height(),
             controls.touch,
             page::has_sandbox(),
+            prompts,
         );
         if shown.as_ref() != Some(&layout) {
             page::show_buttons(&layout.buttons);
             shown = Some(layout.clone());
         }
-        let intents = controls.read(&layout);
-        if intents.clicked {
+        let intents = controls.read(&layout, &page::pads());
+        let again = intents.again && game.outcome().is_some();
+        if intents.clicked || again {
             sound.click();
+        }
+        if intents.controller {
+            page::tell(Moment::Controller);
+        }
+        let pads_now = (controls.pads.connected(), controls.prompts);
+        if pads_shown.as_ref() != Some(&pads_now) {
+            page::show_pads(&pads_now.0, pads_now.1);
+            pads_shown = Some(pads_now);
         }
         apply(&mut game, &intents);
         game.advance(dt, |world| sound.hear(world));
+        rumble(&mut game, &controls);
         sound.play(dt as f32, game.muted, game.running);
         game.blend();
         hud::draw(&game, &layout, controls.held());
@@ -93,9 +112,27 @@ async fn run() {
     }
 }
 
+/// Rumbles the controllers of the players who felt something since the last
+/// frame: those that play the fighter, the right one only while a second
+/// player plays it rather than the computer.
+fn rumble(game: &mut Game, controls: &Controls) {
+    for feel in game.take_feels() {
+        let fighter = feel.fighter();
+        if fighter == RIGHT && !game.second_player_plays() {
+            continue;
+        }
+        let (strong, weak, ms) = pads::rumble_for(feel);
+        for slot in controls.pads.playing(fighter) {
+            page::rumble(slot, strong, weak, ms);
+        }
+    }
+}
+
 /// Does what the players asked for this frame.
 fn apply(game: &mut Game, intents: &Intents) {
-    if intents.restart {
+    // A controller's bottom face button starts the next fight once one is
+    // over.
+    if intents.restart || (intents.again && game.outcome().is_some()) {
         game.restart();
     }
     if intents.level {
@@ -121,5 +158,7 @@ fn apply(game: &mut Game, intents: &Intents) {
         for hold in Hold::ALL {
             game.hold(fighter, hold, intents.holds[fighter][hold.index()]);
         }
+        let [toward, away] = intents.walks[fighter];
+        game.walk(fighter, toward, away);
     }
 }

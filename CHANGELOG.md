@@ -3,6 +3,14 @@
 Each version of the Fight page, newest first. The page shows the newest
 entry's lines as written.
 
+## v0.6 (2026-11-17)
+
+- Fight with a game controller: a PS5 DualSense, a PS4 DualShock 4, an Xbox controller, or any other your browser reads. Press any of its buttons to connect it.
+- The D-pad or left stick steps (hold it to keep stepping), leans back, and ducks; L2 (LT) jabs and R2 (RT) crosses, as square and triangle (X and Y) do; R1 or L1 (RB or LB) blocks; OPTIONS (MENU) pauses.
+- The first controller plays your fighter, a second the right fighter; CREATE (VIEW) switches a controller to the other fighter, so a keyboard and a controller can fight each other either way round.
+- The buttons show your controller's own symbols, and the keys again when you press a key.
+- Your controller rumbles when your punch lands, harder when you are hit, and most when you go down. Chrome and Edge cannot rumble a DualSense on Windows by themselves: the first time you press one of its buttons, your browser opens a window to pick it; pick it once, and the page drives it directly. The start card and a button during the fight offer it too.
+
 ## v0.5 (2026-11-17)
 
 - A fighter knocked down gets up on its own: from its back it sits up, crouches, and stands; from its front it comes up onto its knees, takes a knee, and stands.

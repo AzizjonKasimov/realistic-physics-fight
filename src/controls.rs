@@ -12,11 +12,14 @@
 //! block). On the screen the left fighter's moves are buttons too, for a
 //! mouse or for fingers: its steps, lean, and duck at the bottom left, under
 //! a left thumb, and its jab, cross, and block at the bottom right, under a
-//! right thumb; every finger on the screen counts.
+//! right thumb; every finger on the screen counts. Game controllers drive
+//! either fighter alongside all of these (`pads.rs`).
 
 use macroquad::prelude::*;
 
+use crate::game::LEFT;
 use crate::hud::Layout;
+use crate::pads::{Pad, PadIntents, PadKind, Pads};
 
 /// A move a fighter makes once each time its key or button is pressed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -119,17 +122,25 @@ pub struct Intents {
     pub acts: [[bool; 4]; 2],
     /// The moves held, by fighter, in [`Hold::ALL`]'s order.
     pub holds: [[bool; 3]; 2],
+    /// A step held on a controller toward the other fighter, and one away
+    /// from it, by fighter: the fighter keeps stepping while it is held.
+    pub walks: [[bool; 2]; 2],
     pub pause: bool,
     pub restart: bool,
+    /// A controller's bottom face button: the next fight, once this one is
+    /// over.
+    pub again: bool,
     pub mute: bool,
     pub sandbox: bool,
     /// A fight against the opponent's next level.
     pub level: bool,
     /// One of the game's own buttons or keys was pressed, which clicks.
     pub clicked: bool,
+    /// A game controller pressed something for a fighter.
+    pub controller: bool,
 }
 
-/// The players' keys and buttons from one frame to the next.
+/// The players' keys, buttons, and controllers from one frame to the next.
 #[derive(Debug, Default)]
 pub struct Controls {
     /// The buttons held down last frame: a button counts as pressed on the
@@ -138,6 +149,11 @@ pub struct Controls {
     /// The screen has been touched, so the buttons are sized for fingers
     /// and show no keys.
     pub touch: bool,
+    /// The controllers connected, and the fighter each plays.
+    pub pads: Pads,
+    /// The kind of controller the left fighter's player last used, whose
+    /// buttons the screen shows; none once a key of theirs is pressed.
+    pub prompts: Option<PadKind>,
 }
 
 impl Controls {
@@ -146,9 +162,18 @@ impl Controls {
         &self.held
     }
 
-    /// Reads this frame's keys and the buttons under each finger, or under
-    /// the mouse while its button is down.
-    pub fn read(&mut self, layout: &Layout) -> Intents {
+    /// Whose buttons the screen shows for a second player and in its texts:
+    /// the controller the left fighter's player uses, else the first
+    /// controller connected, if any is.
+    pub fn connected_kind(&self) -> Option<PadKind> {
+        self.prompts
+            .or_else(|| self.pads.connected().first().map(|&(_, kind, _)| kind))
+    }
+
+    /// Reads this frame's keys, the buttons under each finger, or under the
+    /// mouse while its button is down, and the controllers connected now
+    /// (`pads`).
+    pub fn read(&mut self, layout: &Layout, pads: &[Pad]) -> Intents {
         let touches = touches();
         if !touches.is_empty() {
             self.touch = true;
@@ -178,8 +203,36 @@ impl Controls {
             pressed: |key| is_key_pressed(key),
             down: |key| is_key_down(key),
         };
-        intents_from(&self.held, &pressed, &keys)
+        let from_pads = self.pads.read(pads);
+        self.prompts = prompts_after(self.prompts, left_keys_pressed(&keys), from_pads.used[LEFT]);
+        intents_from(&self.held, &pressed, &keys, &from_pads)
     }
+}
+
+/// Whose buttons the screen shows for the left fighter after a frame:
+/// a controller's once it is used for it, the keys once one of its keys is
+/// pressed, the controller winning a frame with both.
+pub fn prompts_after(
+    was: Option<PadKind>,
+    keys_pressed: bool,
+    pad_used: Option<PadKind>,
+) -> Option<PadKind> {
+    match (pad_used, keys_pressed) {
+        (Some(kind), _) => Some(kind),
+        (None, true) => None,
+        (None, false) => was,
+    }
+}
+
+/// Whether one of the left fighter's own keys went down this frame.
+pub fn left_keys_pressed<P: Fn(KeyCode) -> bool, D: Fn(KeyCode) -> bool>(
+    keys: &Keys<P, D>,
+) -> bool {
+    ACT_KEYS[LEFT]
+        .iter()
+        .chain(HOLD_KEYS[LEFT].iter())
+        .flat_map(|keys| keys.iter())
+        .any(|&key| (keys.pressed)(key))
 }
 
 /// How the keyboard stands this frame.
@@ -190,11 +243,13 @@ pub struct Keys<P: Fn(KeyCode) -> bool, D: Fn(KeyCode) -> bool> {
     pub down: D,
 }
 
-/// What the buttons `held` (`pressed` of them just now) and the keys ask for.
+/// What the buttons `held` (`pressed` of them just now), the keys, and the
+/// controllers (`pads`) ask for.
 pub fn intents_from<P: Fn(KeyCode) -> bool, D: Fn(KeyCode) -> bool>(
     held: &[Button],
     pressed: &[Button],
     keys: &Keys<P, D>,
+    pads: &PadIntents,
 ) -> Intents {
     let mut intents = Intents::default();
     for fighter in 0..2 {
@@ -202,29 +257,53 @@ pub fn intents_from<P: Fn(KeyCode) -> bool, D: Fn(KeyCode) -> bool>(
             intents.acts[fighter][act.index()] = pressed.contains(&Button::Act(fighter, act))
                 || ACT_KEYS[fighter][act.index()]
                     .iter()
-                    .any(|&key| (keys.pressed)(key));
+                    .any(|&key| (keys.pressed)(key))
+                || pads.acts[fighter][act.index()];
         }
         for hold in Hold::ALL {
             intents.holds[fighter][hold.index()] = held.contains(&Button::Hold(fighter, hold))
                 || HOLD_KEYS[fighter][hold.index()]
                     .iter()
-                    .any(|&key| (keys.down)(key));
+                    .any(|&key| (keys.down)(key))
+                || pads.holds[fighter][hold.index()];
         }
     }
+    intents.walks = pads.walks;
     intents.pause = pressed.contains(&Button::Pause)
         || (keys.pressed)(KeyCode::Space)
-        || (keys.pressed)(KeyCode::P);
+        || (keys.pressed)(KeyCode::P)
+        || pads.pause;
     intents.restart = pressed.contains(&Button::Restart) || (keys.pressed)(KeyCode::R);
+    intents.again = pads.again;
     intents.mute = pressed.contains(&Button::Sound) || (keys.pressed)(KeyCode::M);
     intents.sandbox = pressed.contains(&Button::Sandbox) || (keys.pressed)(KeyCode::Escape);
     intents.level = pressed.contains(&Button::Level);
     intents.clicked = intents.pause || intents.restart || intents.mute || intents.level;
+    intents.controller = pads.used.iter().any(Option::is_some);
     intents
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pads::tests::{pad, pulled, STILL};
+    use crate::pads::{standard, Pad};
+
+    /// What the buttons and the keys ask for, with no controller connected.
+    fn intents_from<P: Fn(KeyCode) -> bool, D: Fn(KeyCode) -> bool>(
+        held: &[Button],
+        pressed: &[Button],
+        keys: &Keys<P, D>,
+    ) -> Intents {
+        super::intents_from(held, pressed, keys, &PadIntents::default())
+    }
+
+    /// What the controllers connected now (`pads`) ask for, after the
+    /// frames `seen` already read, with no key down: through the same path
+    /// as the keys.
+    fn from_pads(seen: &mut Pads, pads: &[Pad]) -> Intents {
+        super::intents_from(&[], &[], &keys(&[], &[]), &seen.read(pads))
+    }
 
     fn keys(
         pressed: &[KeyCode],
@@ -331,5 +410,153 @@ mod tests {
         );
         let none = intents_from(&[], &[], &keys(&[], &[]));
         assert_eq!(none, Intents::default());
+    }
+
+    /// A controller's left trigger jabs and its right trigger crosses, once a
+    /// pull, as its left and top face buttons do; either shoulder button
+    /// blocks, and the D-pad or the left stick ducks down and leans back up
+    /// while held: for the fighter it plays, the left for the first
+    /// controller, as the keys do.
+    #[test]
+    fn a_controller_plays_its_fighter_as_the_keys_do() {
+        let still = pad(0, PadKind::PlayStation, &[], STILL);
+        for (down, act) in [
+            (pulled(still, [1.0, 0.0]), Act::Jab),
+            (pulled(still, [0.0, 1.0]), Act::Cross),
+            (
+                pad(0, PadKind::PlayStation, &[standard::LEFT], STILL),
+                Act::Jab,
+            ),
+            (
+                pad(0, PadKind::PlayStation, &[standard::TOP], STILL),
+                Act::Cross,
+            ),
+        ] {
+            let mut seen = Pads::default();
+            from_pads(&mut seen, &[still]);
+            let intents = from_pads(&mut seen, &[down]);
+            assert_eq!(asked(&intents, 0), (vec![act], vec![]), "{down:?}");
+            assert_eq!(asked(&intents, 1), (vec![], vec![]), "{down:?}");
+            let held = from_pads(&mut seen, &[down]);
+            assert_eq!(asked(&held, 0), (vec![], vec![]), "{down:?} held");
+        }
+        let stick = |down: f32| [0.0, down, 0.0, 0.0];
+        for (buttons, axes, hold) in [
+            (&[standard::R1][..], STILL, Hold::Block),
+            (&[standard::L1][..], STILL, Hold::Block),
+            (&[standard::DOWN][..], STILL, Hold::Duck),
+            (&[][..], stick(0.9), Hold::Duck),
+            (&[standard::UP][..], STILL, Hold::Lean),
+            (&[][..], stick(-0.9), Hold::Lean),
+        ] {
+            let mut seen = Pads::default();
+            let intents = from_pads(&mut seen, &[pad(0, PadKind::Xbox, buttons, axes)]);
+            assert_eq!(
+                asked(&intents, 0),
+                (vec![], vec![hold]),
+                "{buttons:?} {axes:?}"
+            );
+        }
+    }
+
+    /// Toward the other fighter is right on the left fighter's controller
+    /// and left on the right fighter's, on the D-pad or the stick; a step
+    /// held asks to keep stepping.
+    #[test]
+    fn a_controller_steps_toward_the_other_fighter() {
+        let mut seen = Pads::default();
+        let across = |x: f32| [x, 0.0, 0.0, 0.0];
+        let toward = from_pads(
+            &mut seen,
+            &[
+                pad(0, PadKind::PlayStation, &[standard::PAD_RIGHT], STILL),
+                pad(1, PadKind::Xbox, &[], across(-0.8)),
+            ],
+        );
+        assert_eq!(toward.walks, [[true, false], [true, false]]);
+        assert_eq!(
+            toward.acts, [[false; 4]; 2],
+            "a step is walked, not pressed"
+        );
+        let away = from_pads(
+            &mut seen,
+            &[
+                pad(0, PadKind::PlayStation, &[standard::PAD_LEFT], STILL),
+                pad(1, PadKind::Xbox, &[], across(0.8)),
+            ],
+        );
+        assert_eq!(away.walks, [[false, true], [false, true]]);
+    }
+
+    /// The keyboard plays the left fighter while a controller switched to
+    /// the right fighter plays that one: each moves only its own.
+    #[test]
+    fn the_keyboard_and_a_controller_fight_each_other() {
+        let mut seen = Pads::default();
+        seen.read(&[pad(0, PadKind::PlayStation, &[], STILL)]);
+        seen.read(&[pad(0, PadKind::PlayStation, &[standard::SELECT], STILL)]);
+        let pads = seen.read(&[pad(
+            0,
+            PadKind::PlayStation,
+            &[standard::LEFT, standard::R1],
+            STILL,
+        )]);
+        let intents = super::intents_from(&[], &[], &keys(&[KeyCode::K], &[KeyCode::S]), &pads);
+        assert_eq!(asked(&intents, 0), (vec![Act::Cross], vec![Hold::Duck]));
+        assert_eq!(asked(&intents, 1), (vec![Act::Jab], vec![Hold::Block]));
+    }
+
+    /// A controller's start button pauses as Space does, and its bottom
+    /// face button asks for the next fight.
+    #[test]
+    fn a_controllers_start_pauses_and_its_bottom_button_fights_again() {
+        let mut seen = Pads::default();
+        from_pads(&mut seen, &[pad(0, PadKind::Other, &[], STILL)]);
+        let start = from_pads(
+            &mut seen,
+            &[pad(0, PadKind::Other, &[standard::START], STILL)],
+        );
+        assert!(start.pause && start.clicked && !start.again);
+        let bottom = from_pads(
+            &mut seen,
+            &[pad(0, PadKind::Other, &[standard::BOTTOM], STILL)],
+        );
+        assert!(bottom.again && !bottom.pause);
+        assert_eq!(asked(&bottom, 0), (vec![], vec![]));
+    }
+
+    /// A Sony controller whose buttons come in its own order (as Firefox
+    /// gave a DualSense's before its bug 1849039) jabs on square, crosses on
+    /// triangle, and blocks on R1 all the same.
+    #[test]
+    fn a_sony_controller_in_its_own_order_plays_the_same() {
+        let mut seen = Pads::default();
+        let own_order = |buttons: &[u32]| Pad {
+            standard: false,
+            ..pad(0, PadKind::PlayStation, buttons, STILL)
+        };
+        from_pads(&mut seen, &[own_order(&[])]);
+        let square = from_pads(&mut seen, &[own_order(&[0])]);
+        assert_eq!(asked(&square, 0), (vec![Act::Jab], vec![]));
+        let triangle = from_pads(&mut seen, &[own_order(&[3, 5])]);
+        assert_eq!(asked(&triangle, 0), (vec![Act::Cross], vec![Hold::Block]));
+    }
+
+    /// The screen shows a controller's buttons once it is used for the left
+    /// fighter, and the keys again once one of the left fighter's keys is
+    /// pressed; the right fighter's keys change nothing.
+    #[test]
+    fn the_screen_shows_the_buttons_last_used() {
+        let xbox = Some(PadKind::Xbox);
+        assert_eq!(prompts_after(None, false, xbox), xbox);
+        assert_eq!(prompts_after(xbox, false, None), xbox);
+        assert_eq!(prompts_after(xbox, true, None), None);
+        assert_eq!(prompts_after(None, true, xbox), xbox);
+        assert!(left_keys_pressed(&keys(&[KeyCode::J], &[])));
+        assert!(!left_keys_pressed(&keys(&[KeyCode::Comma], &[])));
+        let mut seen = Pads::default();
+        seen.read(&[pad(0, PadKind::Xbox, &[], STILL)]);
+        let used = seen.read(&[pad(0, PadKind::Xbox, &[], [0.0, 0.9, 0.0, 0.0])]);
+        assert_eq!(used.used, [xbox, None]);
     }
 }

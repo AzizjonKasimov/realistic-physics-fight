@@ -42,6 +42,26 @@ pub const RING_HALF: f64 = 0.66;
 /// it (its `mover.rs`).
 const STEP: f64 = 0.13;
 
+/// Something a fighter's player feels through a controller that rumbles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Feel {
+    /// The fighter's punch landed clean, on the head or the body.
+    Landed(usize),
+    /// The fighter was hit clean.
+    Hit(usize),
+    /// The fighter was knocked down.
+    Down(usize),
+}
+
+impl Feel {
+    /// The fighter whose player feels it.
+    pub fn fighter(self) -> usize {
+        match self {
+            Feel::Landed(fighter) | Feel::Hit(fighter) | Feel::Down(fighter) => fighter,
+        }
+    }
+}
+
 /// The game's version as players see it: v0.2 for 0.2.0, v0.1.2 for 0.1.2.
 pub fn version_label() -> String {
     let version = env!("CARGO_PKG_VERSION");
@@ -74,6 +94,11 @@ pub struct Game {
     /// what each fighter was last told to hold.
     holds: [[bool; 3]; 2],
     told: [[bool; 3]; 2],
+    /// The step each fighter's player holds on a controller, which it keeps
+    /// taking, a step at a time, while it is held.
+    walking: [Option<Act>; 2],
+    /// What the fighters' players have felt since the last frame took it.
+    feels: Vec<Feel>,
     opponent: Opponent,
     /// How long since a second player last pressed the right fighter's
     /// keys, in seconds; none while nobody has.
@@ -116,6 +141,8 @@ impl Game {
             acts: [[false; 4]; 2],
             holds: [[false; 3]; 2],
             told: [[false; 3]; 2],
+            walking: [None; 2],
+            feels: Vec::new(),
             opponent: Opponent::new(level, seed),
             second_player: None,
             seed,
@@ -176,6 +203,47 @@ impl Game {
                     Hold::Duck => Moment::Duck,
                     Hold::Lean => Moment::Lean,
                 });
+            }
+        }
+    }
+
+    /// Whether `fighter`'s player holds a step on a controller, toward the
+    /// other fighter or away from it: the fighter keeps stepping that way, a
+    /// step at a time, while it is held (toward wins if both are).
+    pub fn walk(&mut self, fighter: usize, toward: bool, away: bool) {
+        self.walking[fighter] = if toward {
+            Some(Act::StepIn)
+        } else if away {
+            Some(Act::StepOut)
+        } else {
+            None
+        };
+        if self.walking[fighter].is_some() {
+            self.played(fighter);
+        }
+    }
+
+    /// What the fighters' players felt since this was last asked: punches
+    /// landed and taken clean, and knockdowns, for the controllers to rumble.
+    pub fn take_feels(&mut self) -> Vec<Feel> {
+        std::mem::take(&mut self.feels)
+    }
+
+    /// Each fighter walking on a controller takes its next step once the
+    /// last is done, unless a step back would leave the ring.
+    fn keep_walking(&mut self) {
+        for fighter in [LEFT, RIGHT] {
+            let Some(act) = self.walking[fighter] else {
+                continue;
+            };
+            let free = self
+                .world
+                .fighter_doing(fighter)
+                .is_some_and(|doing| doing.step.is_none() && !doing.fallen);
+            let pressed =
+                self.acts[fighter][Act::StepIn.index()] || self.acts[fighter][Act::StepOut.index()];
+            if free && !pressed && (act == Act::StepIn || self.room_behind(fighter)) {
+                self.press(fighter, act);
             }
         }
     }
@@ -312,6 +380,7 @@ impl Game {
         if let Some(idle) = &mut self.second_player {
             *idle += dt;
         }
+        self.keep_walking();
         if matches!(self.bout.stage(), bout::Stage::Break(_)) {
             self.walk_to_corners();
         } else if let Some(count) = self.bout.count() {
@@ -399,6 +468,12 @@ impl Game {
         self.rim.refresh(&self.world);
         self.camera.follow(&self.world, dt);
         let down = [LEFT, RIGHT].map(|fighter| self.world.fighter_fallen(fighter));
+        for punch in self.world.landed_punches() {
+            if bout::clean(punch.struck) {
+                self.feels
+                    .extend([Feel::Landed(punch.by), Feel::Hit(punch.on)]);
+            }
+        }
         let bell = self.bout.tick(dt, self.world.landed_punches(), down);
         match bell {
             Some(Bell::BoutOver) => {
@@ -409,7 +484,8 @@ impl Game {
             // The fight goes on after a count, or a round begins: the
             // opponent starts afresh.
             Some(Bell::RoundBegins(_) | Bell::Box) => self.opponent.new_round(),
-            Some(Bell::RoundOver(_) | Bell::Knockdown(_)) | None => {}
+            Some(Bell::Knockdown(fighter)) => self.feels.push(Feel::Down(fighter)),
+            Some(Bell::RoundOver(_)) | None => {}
         }
     }
 
@@ -593,6 +669,10 @@ mod tests {
             game.world.knocked_out(RIGHT),
             "the right fighter is not out"
         );
+        assert!(
+            game.take_feels().contains(&Feel::Down(RIGHT)),
+            "the knockdown was not felt"
+        );
         let mut resumed = None;
         for step in 0..12 * 60 {
             // The player presses its punches while the other is down.
@@ -657,6 +737,59 @@ mod tests {
                 "it threw a punch {step} steps on"
             );
         }
+    }
+
+    /// A clean punch is felt by both players' controllers: the one whose
+    /// punch landed, and the one hit.
+    #[test]
+    fn a_clean_punch_is_felt_by_both_players() {
+        let mut game = in_reach();
+        game.take_feels();
+        game.press(LEFT, Act::Cross);
+        steps(&mut game, 45);
+        let feels = game.take_feels();
+        assert!(
+            feels.contains(&Feel::Landed(LEFT)) && feels.contains(&Feel::Hit(RIGHT)),
+            "{feels:?}"
+        );
+        assert_eq!(game.take_feels(), [], "felt twice");
+    }
+
+    /// A step held on a controller keeps stepping, a step at a time: back to
+    /// the ring's edge, two steps behind, then in toward the other fighter;
+    /// once let go, it takes no more.
+    #[test]
+    fn a_step_held_on_a_controller_keeps_stepping() {
+        let mut game = Game::new(1, Level::Normal);
+        // Holds a step for `count` steps and says how many it took.
+        let walk = |game: &mut Game, toward: bool, away: bool, count: usize| {
+            let (mut taken, mut stepping) = (0, false);
+            for _ in 0..count {
+                game.second_player_joins();
+                game.walk(LEFT, toward, away);
+                game.step();
+                let now = game
+                    .world
+                    .fighter_doing(LEFT)
+                    .is_some_and(|doing| doing.step.is_some());
+                taken += usize::from(now && !stepping);
+                stepping = now;
+            }
+            taken
+        };
+        let back = walk(&mut game, false, true, 240);
+        assert_eq!(back, 2, "held back for four seconds, it took {back} steps");
+        assert!(
+            !game.room_behind(LEFT),
+            "it stopped short of the ring's edge"
+        );
+        let toward = walk(&mut game, true, false, 240);
+        assert!(
+            toward >= 3,
+            "held toward the other fighter for four seconds, it took {toward} steps"
+        );
+        let after = walk(&mut game, false, false, 120);
+        assert_eq!(after, 0, "it kept stepping once let go");
     }
 
     /// A second player takes the right fighter by pressing its keys, and
