@@ -10,10 +10,12 @@
 //! sets off), so like a boxer it defends by reading what comes before one:
 //! it covers up, leans back, steps out, or meets the other with a jab as
 //! the other steps in; covers up after it is hit, and the more the other
-//! has been punching; and blocks the second punch of a pair. It counters
+//! has been punching; and blocks the second punch of a pair, high against
+//! punches to the head and low against punches to the body. It counters
 //! while the other's arm comes back, punches more into a lowered guard,
-//! follows a fighter who steps back out of reach, and makes room when
-//! crowded.
+//! goes to the body about one punch in four, and mostly against a high
+//! guard, follows a fighter who steps back out of reach, and makes room
+//! when crowded.
 //!
 //! It is built as simple fighting-game opponents are: a few rules, each
 //! picking a move at random by weights, everything it reacts to seen
@@ -143,6 +145,26 @@ const STEP_SECONDS: f64 = 1.0 / 60.0;
 /// How long the other fighter's punching stays on its mind, in seconds:
 /// each punch it saw counts one, fading to nothing over this long.
 const PRESSURE_SECONDS: f64 = 3.0;
+/// How much of its own punches go to the body, against a guard that is not
+/// up high, and against one that is: professional boxers land about 23% of
+/// their punches to the body (CompuBox), and a high guard leaves it open.
+const BODY_SHARE: f64 = 0.25;
+const BODY_SHARE_INTO_HIGH_GUARD: f64 = 0.7;
+/// The farthest apart it throws a punch to the body from, in body heights
+/// between the fighters' hips: a body punch thrown ducking reaches less far,
+/// and from 0.60 on its jabs fell short.
+const BODY_REACH: f64 = 0.58;
+/// How long it stays down after a punch to the body, in seconds: through
+/// the punch's way out and back.
+const CROUCH_SECONDS: f64 = 0.4;
+/// How far into its duck it is, from 0 to 1, before it throws a punch to the
+/// body: it drops level first, as a player holding duck does. Thrown as the
+/// duck began, from near standing height, its punches went down onto a
+/// blocking fighter's low elbows.
+const CROUCHED: f64 = 0.5;
+/// How long a punch to the body may wait for it to get down, in seconds.
+const CROUCH_PATIENCE_SECONDS: f64 = 0.4;
+
 /// How long a move it decided on may wait while it is busy (its own punch
 /// still out, a step under way, or still leaning or ducked) before it gives
 /// the move up, in seconds.
@@ -163,6 +185,8 @@ pub struct Sight {
     /// on its arms.
     pub hit: bool,
     pub blocked: bool,
+    /// The clean punch that landed on it went to its body.
+    pub hit_body: bool,
 }
 
 /// What the opponent knows of itself, at once: what it is doing, and
@@ -182,12 +206,39 @@ pub struct Wish {
     pub holds: [bool; 3],
 }
 
+/// What it holds for a while: its guard high in front of its face (a
+/// block), low over its body (a block while ducking), or a lean back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Guard {
+    High,
+    Low,
+    Lean,
+}
+
+impl Guard {
+    /// The moves it holds, in [`Hold::ALL`]'s order.
+    fn holds(self) -> [bool; 3] {
+        let mut holds = [false; 3];
+        match self {
+            Guard::High => holds[Hold::Block.index()] = true,
+            Guard::Low => {
+                holds[Hold::Block.index()] = true;
+                holds[Hold::Duck.index()] = true;
+            }
+            Guard::Lean => holds[Hold::Lean.index()] = true,
+        }
+        holds
+    }
+}
+
 /// Something it has decided to do.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Planned {
     Act(Act),
-    /// Holds a move for so many seconds.
-    Hold(Hold, f64),
+    /// A punch to the body: thrown while it ducks.
+    Body(Act),
+    /// Holds a guard for so many seconds.
+    Guard(Guard, f64),
 }
 
 /// A move it has decided on: in how many seconds it is due, and how long it
@@ -217,15 +268,18 @@ pub struct Opponent {
     late: usize,
     /// What it has decided to do.
     plan: Vec<Decided>,
-    /// What it holds, and for how many seconds more.
-    holding: Option<(Hold, f64)>,
+    /// The guard it holds, and for how many seconds more.
+    holding: Option<(Guard, f64)>,
+    /// Seconds it stays down for a punch to the body.
+    crouch: f64,
     /// Seconds until it attacks on its own, in reach.
     attack_in: f64,
     /// Seconds until it may next decide to keep its guard up.
     guard_in: f64,
     /// How much the other fighter has punched lately, a punch counting one
-    /// and fading.
+    /// and fading, and how much of that went to the body.
     pressure: f64,
+    body_pressure: f64,
 }
 
 impl Opponent {
@@ -243,9 +297,11 @@ impl Opponent {
             late: 0,
             plan: Vec::new(),
             holding: None,
+            crouch: 0.0,
             attack_in: 0.0,
             guard_in: 0.0,
             pressure: 0.0,
+            body_pressure: 0.0,
         };
         opponent.late = opponent.draw_late();
         opponent.attack_in = opponent.between(opponent.traits.attack_gap);
@@ -265,7 +321,9 @@ impl Opponent {
         self.last = Sight::default();
         self.plan.clear();
         self.holding = None;
+        self.crouch = 0.0;
         self.pressure = 0.0;
+        self.body_pressure = 0.0;
         self.attack_in = self.between(self.traits.attack_gap);
         self.guard_in = 0.0;
     }
@@ -279,6 +337,7 @@ impl Opponent {
         self.seen.push_back(sight);
         self.steps += 1;
         self.pressure = (self.pressure - dt / PRESSURE_SECONDS).max(0.0);
+        self.body_pressure = (self.body_pressure - dt / PRESSURE_SECONDS).max(0.0);
         // Everything it has not taken in yet that is old enough to be seen.
         let newest = self.steps.saturating_sub(self.late);
         while self.taken < newest {
@@ -322,17 +381,28 @@ impl Opponent {
             })
         };
         let in_reach = now.apart <= REACH;
+        let to_body = now.them.punch.is_some_and(|punch| punch.to_body);
         if their_punch {
             self.pressure += 1.0;
+            if to_body {
+                self.body_pressure += 1.0;
+            }
         }
+        // The other fighter dropping its level, as it does before a punch
+        // to the body (and to duck under one).
+        let dropped = now.them.ducking && !then.them.ducking;
         if now.hit && self.notices() {
-            self.hit_me(me);
+            self.hit_me(me, now.hit_body);
         } else if their_punch && in_reach && self.notices() {
             // Too late for this punch: it punches back into the guard the
-            // punch opened, or covers up against the next.
+            // punch opened, or covers up against the next, low against a
+            // punch to the body.
             if !self.counter(now) && self.chance(self.traits.cover_up * 0.6) {
-                self.cover_up(0.35, 0.6);
+                self.cover(to_body, 0.35, 0.6);
             }
+        } else if dropped && in_reach && self.notices() && self.chance(self.traits.read_step * 0.5)
+        {
+            self.cover(true, 0.4, 0.7);
         } else if came_back && in_reach && self.notices() && self.chance(0.5) {
             // A punch it saw too late to answer as it came: one more chance
             // as it comes back.
@@ -350,12 +420,13 @@ impl Opponent {
         }
     }
 
-    /// It was hit clean: it covers up, makes room, or fires back.
-    fn hit_me(&mut self, me: Itself) {
+    /// It was hit clean, to the body or the head: it covers up where it
+    /// was hit, makes room, or fires back.
+    fn hit_me(&mut self, me: Itself, body: bool) {
         let draw = self.unit();
         let cover = self.traits.cover_up;
         if draw < cover {
-            self.cover_up(0.5, 0.9);
+            self.cover(body, 0.5, 0.9);
         } else if draw < cover + 0.2 && me.room_behind {
             self.forget_plan();
             self.decide(0.0, Planned::Act(Act::StepOut));
@@ -371,11 +442,11 @@ impl Opponent {
     fn read_step_in(&mut self, me: Itself) {
         let choices: &[(u32, u8)] = &[(40, 0), (15, 1), (20, 2), (25, 3)];
         match self.weighted(choices) {
-            0 => self.cover_up(0.5, 0.8),
+            0 => self.cover(false, 0.5, 0.8),
             1 => {
                 self.forget_plan();
                 let seconds = self.between((0.35, 0.55));
-                self.decide(0.0, Planned::Hold(Hold::Lean, seconds));
+                self.decide(0.0, Planned::Guard(Guard::Lean, seconds));
             }
             2 if me.room_behind => {
                 self.forget_plan();
@@ -411,11 +482,13 @@ impl Opponent {
         true
     }
 
-    /// Covers up behind its forearms for between `seconds` seconds.
-    fn cover_up(&mut self, shortest: f64, longest: f64) {
+    /// Covers up behind its forearms, low over its body or high in front of
+    /// its face, for between `shortest` and `longest` seconds.
+    fn cover(&mut self, low: bool, shortest: f64, longest: f64) {
         self.forget_plan();
         let seconds = self.between((shortest, longest));
-        self.decide(0.0, Planned::Hold(Hold::Block, seconds));
+        let guard = if low { Guard::Low } else { Guard::High };
+        self.decide(0.0, Planned::Guard(guard, seconds));
     }
 
     /// What it does this step: what it decided that is due, or, with
@@ -424,6 +497,7 @@ impl Opponent {
         let mut wish = Wish::default();
         if me.doing.fallen {
             self.holding = None;
+            self.crouch = 0.0;
             self.plan.clear();
             return wish;
         }
@@ -433,6 +507,7 @@ impl Opponent {
                 self.holding = None;
             }
         }
+        self.crouch = (self.crouch - dt).max(0.0);
         for decided in &mut self.plan {
             if decided.wait > 0.0 {
                 decided.wait -= dt;
@@ -445,15 +520,27 @@ impl Opponent {
         if let Some(due) = due {
             let planned = self.plan[due].planned;
             match planned {
-                Planned::Hold(hold, seconds) => {
+                Planned::Guard(guard, seconds) => {
                     self.plan.remove(due);
-                    self.holding = Some((hold, seconds));
+                    self.holding = Some((guard, seconds));
                 }
                 Planned::Act(act) => {
                     // A punch or a step lets go of what it held: it drops
-                    // its guard to punch, and comes upright before it steps.
+                    // its guard to punch, and comes upright before it steps
+                    // and out of a crouch to punch, so that after a jab to
+                    // the body the cross goes up to the head.
                     self.holding = None;
+                    self.crouch = 0.0;
                     if free_to(act, me.doing) {
+                        self.plan.remove(due);
+                        wish.act = Some(act);
+                    }
+                }
+                Planned::Body(act) => {
+                    // Down first, then the punch, the duck held through it.
+                    self.holding = None;
+                    self.crouch = self.crouch.max(CROUCH_SECONDS);
+                    if me.doing.duck >= CROUCHED && free_to(act, me.doing) {
                         self.plan.remove(due);
                         wish.act = Some(act);
                     }
@@ -462,8 +549,11 @@ impl Opponent {
         } else if self.holding.is_none() && self.plan.is_empty() {
             wish.act = self.on_its_own(dt, me);
         }
-        if let Some((hold, _)) = self.holding {
-            wish.holds[hold.index()] = true;
+        if let Some((guard, _)) = self.holding {
+            wish.holds = guard.holds();
+        }
+        if self.crouch > 0.0 {
+            wish.holds[Hold::Duck.index()] = true;
         }
         self.attack_in -= dt;
         self.guard_in -= dt;
@@ -490,7 +580,9 @@ impl Opponent {
             let guard = (self.traits.guard + 0.08 * self.pressure).min(0.8);
             if self.chance(guard) {
                 let seconds = self.between((0.5, 1.2));
-                self.holding = Some((Hold::Block, seconds));
+                // Low as often as the other's punches lately went low.
+                let low = self.pressure > 0.0 && self.chance(self.body_pressure / self.pressure);
+                self.holding = Some((if low { Guard::Low } else { Guard::High }, seconds));
                 return None;
             }
         }
@@ -498,15 +590,42 @@ impl Opponent {
             return None;
         }
         self.attack_in = self.between(self.traits.attack_gap);
-        // Into a closed guard it often waits for the guard to open.
-        if seen.them.guarded && self.chance(0.5) {
+        // To the body about one punch in four, and mostly into a high guard,
+        // which leaves the body open; from near enough, as a body punch from
+        // a duck reaches less far than one at the head.
+        let high_guard = seen.them.guarded && !seen.them.guard_low;
+        let body = !seen.them.guard_low
+            && self.chance(if high_guard {
+                BODY_SHARE_INTO_HIGH_GUARD
+            } else {
+                BODY_SHARE
+            });
+        if body && seen.apart > BODY_REACH {
+            // Nearer first, the punch to the body after the step.
+            let wait = self.between((0.6, 0.75));
+            self.decide(wait, Planned::Body(Act::Cross));
+            return Some(Act::StepIn);
+        }
+        // A punch at the head into a closed guard often waits for the guard
+        // to open.
+        if !body && seen.them.guarded && self.chance(0.5) {
             return None;
         }
         let punch = self.pick_punch();
         if punch == Act::Jab && self.chance(self.traits.combo) {
+            // A jab and a cross; after a jab to the body, the cross goes up
+            // to the head the jab brought the guard down from.
             let wait = self.between(COMBO_CROSS);
             self.decide(wait, Planned::Act(Act::Cross));
         }
+        if body {
+            // Planned, so that the duck is held on the step it goes.
+            self.decide(0.0, Planned::Body(punch));
+            return None;
+        }
+        // At the head: up out of the crouch of a punch to the body before,
+        // which would have sent this one to the body too.
+        self.crouch = 0.0;
         Some(punch)
     }
 
@@ -521,9 +640,13 @@ impl Opponent {
 
     /// Decides to do `planned` in `wait` seconds.
     fn decide(&mut self, wait: f64, planned: Planned) {
+        let patience = match planned {
+            Planned::Body(_) => CROUCH_PATIENCE_SECONDS,
+            _ => PATIENCE_SECONDS,
+        };
         self.plan.push(Decided {
             wait,
-            patience: PATIENCE_SECONDS,
+            patience,
             planned,
         });
     }
@@ -612,6 +735,7 @@ mod tests {
             them: rp::Doing {
                 punch: Some(rp::Punching {
                     kind: rp::PunchKind::Jab,
+                    to_body: false,
                     age,
                     out_seconds: 0.11,
                     going_out: age < 0.11,
@@ -629,13 +753,25 @@ mod tests {
     /// behind it.
     fn watch(level: Level, seed: u64, sights: &[Sight]) -> Vec<Wish> {
         let mut opponent = Opponent::new(level, seed);
-        let me = Itself {
+        let mut me = Itself {
             doing: rp::Doing::default(),
             room_behind: true,
         };
         sights
             .iter()
-            .map(|&sight| opponent.tick(DT, sight, me))
+            .map(|&sight| {
+                let wish = opponent.tick(DT, sight, me);
+                // Its own body ducks as it holds duck, most of the way in
+                // about a sixth of a second, and comes up as it lets go.
+                let ducking = wish.holds[Hold::Duck.index()];
+                me.doing.ducking = ducking;
+                me.doing.duck = if ducking {
+                    (me.doing.duck + DT / 0.15).min(1.0)
+                } else {
+                    (me.doing.duck - DT / 0.15).max(0.0)
+                };
+                wish
+            })
             .collect()
     }
 
@@ -718,8 +854,23 @@ mod tests {
             let count = |wanted: Act| acts.iter().filter(|&&act| act == wanted).count();
             let (jabs, crosses) = (count(Act::Jab), count(Act::Cross));
             assert!(
-                jabs > crosses && crosses > 0,
+                jabs > 0 && crosses > 0,
                 "{level:?}: {jabs} jabs, {crosses} crosses"
+            );
+            // Some go to the body, thrown with the duck held: about one in
+            // four into a guard that is not up.
+            let to_body = wishes
+                .iter()
+                .filter(|wish| {
+                    matches!(wish.act, Some(Act::Jab | Act::Cross))
+                        && wish.holds[Hold::Duck.index()]
+                })
+                .count() as f64
+                / (jabs + crosses) as f64;
+            assert!(
+                (0.1..0.45).contains(&to_body),
+                "{level:?} threw {:.0}% of its punches to the body",
+                to_body * 100.0
             );
             let blocking = wishes
                 .iter()

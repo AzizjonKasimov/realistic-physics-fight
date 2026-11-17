@@ -248,6 +248,9 @@ impl Game {
             them: self.world.fighter_doing(LEFT).unwrap_or_default(),
             hit: on_it(true),
             blocked: on_it(false),
+            hit_body: landed
+                .iter()
+                .any(|punch| punch.on == RIGHT && punch.struck == rp::Struck::Body),
         }
     }
 

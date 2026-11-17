@@ -41,7 +41,9 @@
 //! `duck=on`, and `block=on` (and `=off`), the second fighter's with a 2
 //! after the word (`cross2`, `step2=in`). Both fighters move only as it
 //! says, so an engine fight plays in the game step for step as it played
-//! there: random fight 15 knocks the left fighter out on step 1170.
+//! there, unless a fighter punches while blocking or steps past the ring's
+//! edge, which the game's rules change: random fight 90 knocks the left
+//! fighter out on step 159.
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -307,9 +309,21 @@ pub async fn run(request: Request) {
         }
         let ended = game.outcome().is_some();
         game.step();
+        let side = |fighter: usize| if fighter == LEFT { "left" } else { "right" };
+        // Every punch that landed and on what, numbered as the saved frames
+        // are, to find the moments worth filming slowly.
+        for punch in game.world.landed_punches() {
+            println!(
+                "step {}: the {} fighter's {:?} landed on the {:?} at {:.1} m/s",
+                frame + 1,
+                side(punch.by),
+                punch.kind,
+                punch.struck,
+                punch.speed
+            );
+        }
         if let (false, Some((outcome, _))) = (ended, game.outcome()) {
             // How the fight ended, for scripts that play one to its end.
-            let side = |fighter: usize| if fighter == LEFT { "left" } else { "right" };
             let [left, right] = game.bout.clean();
             let how = match outcome {
                 Outcome::Down {

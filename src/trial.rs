@@ -102,10 +102,12 @@ impl Script {
 /// What a bout came to.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Tally {
-    /// Punches each fighter threw, and landed clean and on the arms.
+    /// Punches each fighter threw, and landed clean and on the arms; and of
+    /// the clean ones, those that landed on the body.
     pub thrown: [u32; 2],
     pub clean: [u32; 2],
     pub blocked: [u32; 2],
+    pub to_body: [u32; 2],
     /// Punches the opponent threw within half a second of one of the
     /// player's coming back: its counters.
     pub counters: u32,
@@ -155,6 +157,9 @@ pub fn play_bout(level: Level, player: Player, seed: u64, rules: Rules) -> Tally
         for punch in game.world.landed_punches() {
             if bout::clean(punch.struck) {
                 tally.clean[punch.by] += 1;
+                if punch.struck == rp::Struck::Body {
+                    tally.to_body[punch.by] += 1;
+                }
             } else if punch.struck == rp::Struck::Arm {
                 tally.blocked[punch.by] += 1;
             }
@@ -214,6 +219,25 @@ mod tests {
         assert!(tally.counters >= 4, "{tally:?}");
         assert!(tally.guarding > 0.15 * tally.in_reach, "{tally:?}");
         assert!(tally.clean[RIGHT] > tally.clean[LEFT], "{tally:?}");
+        assert!(!tally.fell);
+    }
+
+    /// Against a player who keeps its guard up and never punches, the
+    /// opponent goes under the guard: most of what it lands goes to the
+    /// body, it wins on clean punches, and nobody falls.
+    #[test]
+    fn the_opponent_goes_to_the_body_of_a_player_who_only_blocks() {
+        let tally = short_bout(Level::Normal, Player::Blocker, 1);
+        assert!(
+            tally.to_body[RIGHT] >= 3 && 2 * tally.to_body[RIGHT] > tally.clean[RIGHT],
+            "{tally:?}"
+        );
+        assert_eq!(
+            tally.outcome,
+            Some(Outcome::Decision {
+                winner: Some(RIGHT)
+            })
+        );
         assert!(!tally.fell);
     }
 
@@ -296,9 +320,9 @@ hard: {hard:?}"
     }
 
     /// Prints what every level does against every scripted player: punches
-    /// thrown, landed clean, and on the arms, by each side; the opponent's
-    /// counters, its share of time in reach spent blocking; and how the
-    /// bouts ended.
+    /// thrown, landed clean, and on the arms, by each side; how many of the
+    /// opponent's clean punches went to the body; the opponent's counters,
+    /// its share of time in reach spent blocking; and how the bouts ended.
     #[test]
     #[ignore]
     fn print_bouts() {
@@ -343,19 +367,20 @@ hard: {hard:?}"
                 .collect()
         });
         println!(
-            "{:<7} {:<8} {:>4}  {:>13} {:>13} {:>13} {:>8} {:>7}  outcome",
+            "{:<7} {:<8} {:>4}  {:>13} {:>13} {:>13} {:>6} {:>8} {:>7}  outcome",
             "level",
             "player",
             "seed",
             "thrown P/O",
             "clean P/O",
             "on arms P/O",
+            "body O",
             "counters",
             "guard%"
         );
         for (level, player, seed, tally) in results {
             println!(
-                "{:<7} {:<8} {:>4}  {:>6}/{:<6} {:>6}/{:<6} {:>6}/{:<6} {:>8} {:>6.0}%  {:?}{}",
+                "{:<7} {:<8} {:>4}  {:>6}/{:<6} {:>6}/{:<6} {:>6}/{:<6} {:>6} {:>8} {:>6.0}%  {:?}{}",
                 level.name(),
                 format!("{player:?}").to_lowercase(),
                 seed,
@@ -365,6 +390,7 @@ hard: {hard:?}"
                 tally.clean[1],
                 tally.blocked[0],
                 tally.blocked[1],
+                tally.to_body[1],
                 tally.counters,
                 100.0 * tally.guarding / tally.in_reach.max(1e-9),
                 tally.outcome,

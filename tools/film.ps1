@@ -7,7 +7,8 @@ Runs the game's capture mode (--capture --script --every, src/capture.rs)
 into a folder of frames beside the film, then joins the frames into an MP4
 with ffmpeg, at the speed the game plays (60 steps a second) or slower with
 -Slow. Builds the game first (release) unless -SkipBuild. Writes only the
-film and its frames; touches nothing else.
+film and its frames; touches nothing else. Keeps the display on while the
+game plays, and prints each punch that lands, on which step and on what.
 
 .PARAMETER Out
 The MP4 to write, such as output\round.mp4. Its frames go in a folder of
@@ -112,7 +113,21 @@ if ($BreakSeconds -gt 0) { $arguments += @("--break-seconds", $BreakSeconds.ToSt
 if ($Touch) { $arguments += "--touch" }
 if ($Sandbox) { $arguments += "--sandbox" }
 Write-Host "==> Play the script and save every $Every steps"
-& $exe @arguments | Select-Object -Last 1
+# The capture's window must stay shown: a display that sleeps mid-film
+# shrinks the frames. Hold the display on while the game plays, for this
+# script's run only (SetThreadExecutionState changes no setting).
+if (-not ("FilmPower.Native" -as [type])) {
+    Add-Type -Namespace FilmPower -Name Native -MemberDefinition '[DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint flags);'
+}
+# ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED, then ES_CONTINUOUS alone.
+[void][FilmPower.Native]::SetThreadExecutionState([uint32]"0x80000003")
+try {
+    # Each punch that lands and on which step, and how the fight ended; not
+    # the line the capture writes for every frame it saves.
+    & $exe @arguments | Where-Object { $_ -notmatch '-\d+\.png$' }
+} finally {
+    [void][FilmPower.Native]::SetThreadExecutionState([uint32]"0x80000000")
+}
 if ($LASTEXITCODE -ne 0) { throw "the game's capture failed with exit code $LASTEXITCODE" }
 
 # The frames are numbered by step (name-0002.png, name-0004.png, ...), which

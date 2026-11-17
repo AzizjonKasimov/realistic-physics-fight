@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Realistic Physics: Fight</title>
-<meta name="description" content="Two boxers on a realistic injury simulation: step in, jab, cross, block, duck, and lean back against a computer opponent over three rounds, or a friend, and watch skin, muscle and bone respond through real physics. Runs in your browser.">
+<meta name="description" content="Two boxers on a realistic injury simulation: step in, jab, cross, punch to the body, block, duck, and lean back against a computer opponent over three rounds, or a friend, and watch skin, muscle and bone respond through real physics. Runs in your browser.">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Realistic Physics: Fight">
 <meta property="og:description" content="Box a computer opponent over three rounds and watch skin, muscle and bone respond through real physics. Runs in your browser.">
@@ -189,7 +189,7 @@
     <!-- tools/build_web.ps1 fills in the game's version, the engine's, and
          what is new, from Cargo.toml, the engine, and CHANGELOG.md. -->
     <h1 id="title">Fight <span class="version"></span></h1>
-    <p class="tagline">Two boxers seen from the side, on a realistic injury simulation: step in, jab, cross, block, duck, and lean back against a computer opponent, over three one-minute rounds. Every blow hurts skin, muscle and bone through real physics, and a hard one to the jaw can knock a fighter out.</p>
+    <p class="tagline">Two boxers seen from the side, on a realistic injury simulation: step in, jab, cross, punch to the body, block, duck, and lean back against a computer opponent, over three one-minute rounds. Every blow hurts skin, muscle and bone through real physics, and a hard one to the jaw can knock a fighter out.</p>
     <p class="warning"><strong>Content warning:</strong> graphic simulated injury, including blood, torn tissue and broken bones.</p>
     <fieldset class="level">
       <legend>Your opponent</legend>
@@ -202,9 +202,9 @@
     <button id="start" type="button">Start the fight</button>
     <dl class="controls">
       <dt>D / A</dt><dd>Step in toward the other fighter / step back</dd>
-      <dt>W / S</dt><dd>Hold to lean back, so a punch falls short / hold to duck under it</dd>
+      <dt>W / S</dt><dd>Hold to lean back, so a punch falls short / hold to duck under it; a punch thrown while ducking goes to the body</dd>
       <dt>J / K</dt><dd>Jab with your front hand / cross with your back hand</dd>
-      <dt>L</dt><dd>Hold to block: your forearms stop punches, which otherwise go between your open hands</dd>
+      <dt>L</dt><dd>Hold to block: your forearms stop punches at your head, which otherwise go between your open hands. Held while ducking, they cover your body and leave your head open</dd>
       <dt>Arrows , . /</dt><dd>A friend plays the right fighter: the arrows step, lean back, and duck; comma, full stop, and slash jab, cross, and block. Left alone, the computer opponent fights it</dd>
       <dt>Space / R / M</dt><dd>Pause / start afresh / sound on or off</dd>
       <dt>Level</dt><dd>The button at the top starts a new fight against the next level of opponent</dd>

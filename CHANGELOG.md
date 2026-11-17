@@ -3,6 +3,13 @@
 Each version of the Fight page, newest first. The page shows the newest
 entry's lines as written.
 
+## v0.4 (2026-11-17)
+
+- A jab or cross thrown while you hold DUCK goes to the body, under the other fighter's block.
+- Hold BLOCK while ducking for a low block: your forearms cover your body, and your head is open.
+- The computer opponent goes to the body about one punch in four, more when your guard is up, and blocks low against punches to the body.
+- A punch to the body counts as a clean punch.
+
 ## v0.3 (2026-11-16)
 
 - A computer opponent fights the right fighter. It sees what you do a moment late, as a person would: it covers up or leans back as you step in, counters when you punch, follows you when you back off, and makes mistakes.
