@@ -3,6 +3,10 @@
 Each version of the Fight page, newest first. The page shows the newest
 entry's lines as written.
 
+## v0.6.1 (2026-11-19)
+
+- A punch that lands no longer shows the bone of the hand coming out through the knuckles for a moment: the fighters' bones stay inside their skin, and a fighter who falls keeps the flesh on its legs.
+
 ## v0.6 (2026-11-17)
 
 - Fight with a game controller: a PS5 DualSense, a PS4 DualShock 4, an Xbox controller, or any other your browser reads. Press any of its buttons to connect it.
