@@ -4,9 +4,10 @@
 //!
 //! `cargo test --release print_bouts -- --ignored --nocapture` plays every
 //! level against every scripted player and prints a table; `RP_BOUTS=N`
-//! plays N seeds of each (default 2), `RP_ROUND=S` makes the bouts one
-//! round S seconds long (default 30), and `RP_LEVEL` / `RP_PLAYER` keep one
-//! level or player.
+//! plays N seeds of each (default 2), `RP_ROUND=S` makes the bouts' rounds
+//! S seconds long (default 30), `RP_ROUNDS=N` plays N of them with the
+//! game's ten seconds' rest between (default 1), and `RP_LEVEL` /
+//! `RP_PLAYER` keep one level or player.
 
 use realistic_physics as rp;
 
@@ -23,14 +24,33 @@ pub enum Player {
     /// Steps into reach and jabs about once a second, its guard never up.
     Jabber,
     /// Steps into reach, jabs and crosses, keeps its guard up between, and
-    /// steps back out now and then.
+    /// steps back out now and then: a busy fighter, punching about once a
+    /// second, three times as often as boxers do in a bout.
     Boxer,
+    /// Fights as the boxer does at a boxer's pace, a punch every 1.2 to 2.5
+    /// seconds, its guard up between: about 30 a minute, as busy
+    /// professionals throw (CompuBox).
+    Paced,
     /// Steps into reach and keeps its guard up, never punching.
     Blocker,
+    /// Stands where it is and hammers the punch buttons: a jab or a cross,
+    /// at random, the moment its last punch is back, its guard never up.
+    Spammer,
+    /// Hammers the punch buttons as the spammer does, and steps in after an
+    /// opponent who steps out of its reach.
+    Presser,
 }
 
 impl Player {
-    pub const ALL: [Player; 4] = [Player::Idle, Player::Jabber, Player::Boxer, Player::Blocker];
+    pub const ALL: [Player; 7] = [
+        Player::Idle,
+        Player::Jabber,
+        Player::Boxer,
+        Player::Paced,
+        Player::Blocker,
+        Player::Spammer,
+        Player::Presser,
+    ];
 }
 
 /// A scripted player's mind: its own seeded draws, and the seconds until it
@@ -67,8 +87,25 @@ impl Script {
         self.guard -= dt;
         let busy = doing.step.is_some() || doing.punch.is_some();
         let guarding = matches!(self.player, Player::Blocker)
-            || (self.player == Player::Boxer && self.guard > 0.0);
+            || (matches!(self.player, Player::Boxer | Player::Paced) && self.guard > 0.0);
         game.hold(LEFT, Hold::Block, guarding);
+        if matches!(self.player, Player::Spammer | Player::Presser) {
+            if self.player == Player::Presser && apart > REACH {
+                if !busy {
+                    game.press(LEFT, Act::StepIn);
+                }
+                return;
+            }
+            if doing.punch.is_none() {
+                let punch = if self.unit() < 0.5 {
+                    Act::Jab
+                } else {
+                    Act::Cross
+                };
+                game.press(LEFT, punch);
+            }
+            return;
+        }
         if self.player == Player::Idle || busy || self.wait > 0.0 {
             return;
         }
@@ -78,12 +115,12 @@ impl Script {
             return;
         }
         match self.player {
-            Player::Idle | Player::Blocker => {}
+            Player::Idle | Player::Blocker | Player::Spammer | Player::Presser => {}
             Player::Jabber => {
                 game.press(LEFT, Act::Jab);
                 self.wait = 0.8 + 0.4 * self.unit();
             }
-            Player::Boxer => {
+            Player::Boxer | Player::Paced => {
                 let draw = self.unit();
                 if apart < CLOSE && draw < 0.15 {
                     game.press(LEFT, Act::StepOut);
@@ -92,7 +129,11 @@ impl Script {
                 } else {
                     game.press(LEFT, Act::Cross);
                 }
-                self.wait = 0.5 + 0.7 * self.unit();
+                self.wait = if self.player == Player::Paced {
+                    1.2 + 1.3 * self.unit()
+                } else {
+                    0.5 + 0.7 * self.unit()
+                };
                 self.guard = self.wait;
             }
         }
@@ -106,18 +147,34 @@ pub struct Tally {
     /// the clean ones, those that landed on the body.
     pub thrown: [u32; 2],
     pub clean: [u32; 2],
+    /// Of the clean punches, those hard enough to count (`bout::counts`).
+    pub counted: [u32; 2],
     pub blocked: [u32; 2],
     pub to_body: [u32; 2],
+    /// The fist speeds of each fighter's clean punches, in metres a second,
+    /// added up, and how many landed under each of `SLOW_SPEEDS`.
+    pub clean_speed: [f64; 2],
+    pub slow: [[u32; 3]; 2],
+    /// How much of each fighter's arms' strength it had lost to tiring as
+    /// the bout ended, and at most.
+    pub tiredness: [f64; 2],
+    pub most_tired: [f64; 2],
     /// Punches the opponent threw within half a second of one of the
     /// player's coming back: its counters.
     pub counters: u32,
     /// Seconds the opponent spent blocking, and in reach of the player.
     pub guarding: f64,
     pub in_reach: f64,
+    /// Steps the opponent took back, and in.
+    pub opponent_steps: [u32; 2],
     pub outcome: Option<Outcome>,
     /// A fighter went down, knocked down or slipping.
     pub fell: bool,
 }
+
+/// Landing speeds, in metres a second, under which the trial counts a
+/// clean punch slow.
+pub const SLOW_SPEEDS: [f64; 3] = [6.5, 7.0, 7.5];
 
 /// Plays a bout of `rules` against an opponent of `level`, its decisions
 /// following from `seed`, with `player` playing the left fighter.
@@ -127,6 +184,7 @@ pub fn play_bout(level: Level, player: Player, seed: u64, rules: Rules) -> Tally
     let dt = game.world.materials().fixed_dt;
     let mut tally = Tally::default();
     let mut punching = [false; 2];
+    let mut stepping = false;
     let mut came_back: Option<f64> = None;
     let mut clock = 0.0;
     let length = rules.rounds as f64 * (rules.round_seconds + rules.break_seconds) + 1.0;
@@ -150,9 +208,47 @@ pub fn play_bout(level: Level, player: Player, seed: u64, rules: Rules) -> Tally
             if fighter == RIGHT && doing.guarded {
                 tally.guarding += dt;
             }
+            if fighter == RIGHT {
+                let step = doing.step.filter(|step| !step.catching);
+                if let (Some(step), false) = (step, stepping) {
+                    tally.opponent_steps[usize::from(step.forward)] += 1;
+                }
+                stepping = step.is_some();
+            }
+            tally.tiredness[fighter] = game.tiredness(fighter);
+            tally.most_tired[fighter] = tally.most_tired[fighter].max(tally.tiredness[fighter]);
         }
         if game.apart() <= REACH {
             tally.in_reach += dt;
+        }
+        // `RP_TRACE_BOUT=1`: twice a second, how far apart the fighters
+        // stand, where each stands across the ring, how tired each is, and
+        // what the opponent is doing.
+        if std::env::var("RP_TRACE_BOUT").is_ok()
+            && ((clock / dt).round() as u64).is_multiple_of(30)
+        {
+            let doing = game.world.fighter_doing(RIGHT).unwrap_or_default();
+            let stands = |fighter| {
+                (game.world.fighter_stands(fighter).unwrap_or(0.0)
+                    - rp::scenarios::SCENARIO_WIDTH * 0.5)
+                    / rp::world_frame().height
+            };
+            println!(
+                "{clock:5.1}s apart {:.2} (P {:+.2}, O {:+.2}) tired P {:.2} O {:.2}; opponent {}{}{}{}",
+                game.apart(),
+                stands(LEFT),
+                stands(RIGHT),
+                game.tiredness(LEFT),
+                game.tiredness(RIGHT),
+                if doing.guarded { "guard " } else { "" },
+                if doing.punch.is_some() { "punch " } else { "" },
+                match doing.step {
+                    Some(step) if step.forward => "step in ",
+                    Some(_) => "step back ",
+                    None => "",
+                },
+                if game.room_behind(RIGHT) { "" } else { "(at the ropes)" },
+            );
         }
         tally.fell |= [LEFT, RIGHT]
             .into_iter()
@@ -160,6 +256,11 @@ pub fn play_bout(level: Level, player: Player, seed: u64, rules: Rules) -> Tally
         for punch in game.world.landed_punches() {
             if bout::clean(punch.struck) {
                 tally.clean[punch.by] += 1;
+                tally.counted[punch.by] += u32::from(bout::counts(punch));
+                tally.clean_speed[punch.by] += punch.speed;
+                for (slow, &speed) in tally.slow[punch.by].iter_mut().zip(&SLOW_SPEEDS) {
+                    *slow += u32::from(punch.speed < speed);
+                }
                 if punch.struck == rp::Struck::Body {
                     tally.to_body[punch.by] += 1;
                 }
@@ -254,6 +355,46 @@ hard: {hard:?}"
         assert!(!easy.fell && !hard.fell);
     }
 
+    /// A player who stands and hammers the punch buttons tires within the
+    /// round, many of its punches landing too slow to count, while the hard
+    /// opponent, weathering the flurry behind its guard and countering now
+    /// and then, stays fresher and wins on the punches that count; a careful
+    /// player stays fresher than the masher.
+    #[test]
+    fn a_masher_tires_and_loses_to_the_hard_opponent() {
+        let rules = Rules {
+            rounds: 1,
+            round_seconds: 45.0,
+            break_seconds: 1.0,
+        };
+        let (masher, careful) = std::thread::scope(|scope| {
+            let masher = scope.spawn(|| play_bout(Level::Hard, Player::Spammer, 1, rules));
+            let careful = scope.spawn(|| play_bout(Level::Hard, Player::Boxer, 1, rules));
+            (masher.join().unwrap(), careful.join().unwrap())
+        });
+        assert!(masher.tiredness[LEFT] > 0.18, "{masher:?}");
+        assert!(
+            f64::from(masher.counted[LEFT]) < 0.8 * f64::from(masher.clean[LEFT]),
+            "{masher:?}"
+        );
+        assert!(
+            masher.tiredness[RIGHT] < masher.tiredness[LEFT],
+            "{masher:?}"
+        );
+        assert_eq!(
+            masher.outcome,
+            Some(Outcome::Decision {
+                winner: Some(RIGHT)
+            }),
+            "{masher:?}"
+        );
+        assert!(
+            careful.tiredness[LEFT] < masher.tiredness[LEFT],
+            "careful: {careful:?}
+masher: {masher:?}"
+        );
+    }
+
     /// A bout of two short rounds: the bell ends the first; in the rest the
     /// fighters throw nothing and walk back to their corners, out of each
     /// other's reach; the second round begins; and the last bell gives a
@@ -324,10 +465,15 @@ hard: {hard:?}"
     fn print_bouts() {
         let bouts = env_number("RP_BOUTS", 2.0) as u64;
         let round = env_number("RP_ROUND", 30.0);
+        let rounds = env_number("RP_ROUNDS", 1.0) as u32;
         let rules = Rules {
-            rounds: 1,
+            rounds,
             round_seconds: round,
-            break_seconds: 1.0,
+            break_seconds: if rounds > 1 {
+                Rules::default().break_seconds
+            } else {
+                1.0
+            },
         };
         let only_level = std::env::var("RP_LEVEL").ok();
         let only_player = std::env::var("RP_PLAYER").ok();
@@ -363,20 +509,73 @@ hard: {hard:?}"
                 .collect()
         });
         println!(
-            "{:<7} {:<8} {:>4}  {:>13} {:>13} {:>13} {:>6} {:>8} {:>7}  outcome",
+            "{:<7} {:<8} {:>4}  {:>13} {:>13} {:>13} {:>13} {:>13} {:>17} {:>17} {:>6} {:>8} {:>7} {:>6} {:>9}  outcome",
             "level",
             "player",
             "seed",
             "thrown P/O",
             "clean P/O",
+            "counted P/O",
             "on arms P/O",
+            "m/s P/O",
+            "<6.5/7/7.5 P",
+            "<6.5/7/7.5 O",
             "body O",
             "counters",
-            "guard%"
+            "guard%",
+            "reach",
+            "O back/in"
         );
+        // Each level against each player: bouts the player won, lost, and
+        // drew, and the punches each side had counted and its tiredness at
+        // the end, added up over its bouts.
+        struct Row {
+            level: Level,
+            player: Player,
+            outcomes: [u32; 3],
+            counted: [f64; 2],
+            tired: [f64; 2],
+            bouts: u32,
+        }
+        let mut summary: Vec<Row> = Vec::new();
+        for (level, player, _, tally) in &results {
+            let row = match summary
+                .iter_mut()
+                .position(|row| row.level == *level && row.player == *player)
+            {
+                Some(index) => &mut summary[index],
+                None => {
+                    summary.push(Row {
+                        level: *level,
+                        player: *player,
+                        outcomes: [0; 3],
+                        counted: [0.0; 2],
+                        tired: [0.0; 2],
+                        bouts: 0,
+                    });
+                    summary.last_mut().unwrap()
+                }
+            };
+            let slot = match tally.outcome {
+                Some(Outcome::Decision { winner: None }) | None => 2,
+                Some(Outcome::Decision { winner: Some(LEFT) })
+                | Some(Outcome::KnockedOut { down: RIGHT, .. })
+                | Some(Outcome::Stopped { down: RIGHT, .. }) => 0,
+                Some(_) => 1,
+            };
+            row.outcomes[slot] += 1;
+            for fighter in [LEFT, RIGHT] {
+                row.counted[fighter] += f64::from(tally.counted[fighter]);
+                row.tired[fighter] += tally.tiredness[fighter];
+            }
+            row.bouts += 1;
+        }
         for (level, player, seed, tally) in results {
+            let speed = |fighter: usize| {
+                tally.clean_speed[fighter] / f64::from(tally.clean[fighter].max(1))
+            };
             println!(
-                "{:<7} {:<8} {:>4}  {:>6}/{:<6} {:>6}/{:<6} {:>6}/{:<6} {:>6} {:>8} {:>6.0}%  {:?}{}",
+                "{:<7} {:<8} {:>4}  {:>6}/{:<6} {:>6}/{:<6} {:>6}/{:<6} {:>6}/{:<6} {:>6.1}/{:<6.1} {:>17} {:>17} {:>6} {:>8} {:>6.0}% {:>5.0}s {:>4}/{:<4}  {:?}{}  tired P {:.2} (most {:.2}) O {:.2} (most {:.2})",
                 level.name(),
                 format!("{player:?}").to_lowercase(),
                 seed,
@@ -384,13 +583,51 @@ hard: {hard:?}"
                 tally.thrown[1],
                 tally.clean[0],
                 tally.clean[1],
+                tally.counted[0],
+                tally.counted[1],
                 tally.blocked[0],
                 tally.blocked[1],
+                speed(0),
+                speed(1),
+                format!("{}/{}/{}", tally.slow[0][0], tally.slow[0][1], tally.slow[0][2]),
+                format!("{}/{}/{}", tally.slow[1][0], tally.slow[1][1], tally.slow[1][2]),
                 tally.to_body[1],
                 tally.counters,
                 100.0 * tally.guarding / tally.in_reach.max(1e-9),
+                tally.in_reach,
+                tally.opponent_steps[0],
+                tally.opponent_steps[1],
                 tally.outcome,
-                if tally.fell { "  FELL" } else { "" }
+                if tally.fell { "  FELL" } else { "" },
+                tally.tiredness[0],
+                tally.most_tired[0],
+                tally.tiredness[1],
+                tally.most_tired[1],
+            );
+        }
+        println!();
+        println!("level   player   player won/lost/drew  counted P/O (mean)  tired P/O at the end");
+        for Row {
+            level,
+            player,
+            outcomes,
+            counted,
+            tired,
+            bouts,
+        } in summary
+        {
+            let bouts = f64::from(bouts.max(1));
+            println!(
+                "{:<7} {:<8} {:>10}/{}/{}        {:>6.1}/{:<6.1}        {:.2}/{:.2}",
+                level.name(),
+                format!("{player:?}").to_lowercase(),
+                outcomes[0],
+                outcomes[1],
+                outcomes[2],
+                counted[0] / bouts,
+                counted[1] / bouts,
+                tired[0] / bouts,
+                tired[1] / bouts,
             );
         }
     }

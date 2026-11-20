@@ -17,6 +17,17 @@
 //! guard, follows a fighter who steps back out of reach, and makes room
 //! when crowded.
 //!
+//! Punching tires a fighter's arms (the engine's `fatigue.rs`), and it fights
+//! as a boxer does with that: it paces itself, waiting longer between its
+//! punches and countering less the more tired it is; against a fresh fighter
+//! throwing punch after punch it makes room out of reach, or covers up where
+//! there is none, and lets the other punch itself out, as boxers make a
+//! swarmer miss; and it goes after a fighter whose bar shows it tired,
+//! punching and countering more, and stepping in on a tired fighter's
+//! flurry to pick its punches. It counters a flurry now and then from behind
+//! its guard, not every punch of it, which tired it as much as the fighter
+//! flurrying. Its levels differ in how often they do.
+//!
 //! It is built as simple fighting-game opponents are: a few rules, each
 //! picking a move at random by weights, everything it reacts to seen
 //! through a delay drawn afresh for each thing it notices (Shadow Fight 3's
@@ -81,6 +92,9 @@ impl Level {
                 guard: 0.12,
                 attack_gap: (1.0, 2.2),
                 combo: 0.10,
+                counter_gap: (1.6, 3.0),
+                outlast: 0.15,
+                press: 0.25,
             },
             Level::Normal => Traits {
                 reaction: (0.20, 0.32),
@@ -89,8 +103,11 @@ impl Level {
                 counter: 0.55,
                 cover_up: 0.55,
                 guard: 0.25,
-                attack_gap: (0.6, 1.5),
+                attack_gap: (0.9, 2.0),
                 combo: 0.25,
+                counter_gap: (1.1, 2.0),
+                outlast: 0.45,
+                press: 0.5,
             },
             Level::Hard => Traits {
                 reaction: (0.14, 0.22),
@@ -101,6 +118,9 @@ impl Level {
                 guard: 0.40,
                 attack_gap: (0.4, 1.1),
                 combo: 0.40,
+                counter_gap: (0.8, 1.4),
+                outlast: 0.75,
+                press: 0.8,
             },
         }
     }
@@ -129,6 +149,17 @@ struct Traits {
     attack_gap: (f64, f64),
     /// The chance a punch of its own is a jab with a cross behind it.
     combo: f64,
+    /// How long it waits after a counter before it counters again, the
+    /// shortest and the longest, in seconds: a boxer answers a flurry with a
+    /// counter now and then from behind the guard, not with one for each
+    /// punch.
+    counter_gap: (f64, f64),
+    /// The chance it answers a fresh fighter's flurry by making room out
+    /// of its reach, or covering up, and letting it punch itself out.
+    outlast: f64,
+    /// How hard it goes after a tired fighter: how much shorter its waits
+    /// between punches get, and how much likelier its counters.
+    press: f64,
 }
 
 /// Farther apart than this, in body heights between the fighters' hips,
@@ -165,6 +196,27 @@ const CROUCHED: f64 = 0.5;
 /// How long a punch to the body may wait for it to get down, in seconds.
 const CROUCH_PATIENCE_SECONDS: f64 = 0.4;
 
+/// How long it keeps the other fighter's punches in mind to tell a flurry,
+/// in seconds, and how many set off in that long make one: two a second,
+/// many times a boxer's pace over a bout (elite amateurs throw about 20 a
+/// minute; Davis et al. 2015).
+const FLURRY_SECONDS: f64 = 2.0;
+const FLURRY_PUNCHES: usize = 4;
+/// How much of its arms' strength the other fighter has lost, as its bar
+/// shows, from which on the opponent goes after it.
+const TIRED: f64 = 0.15;
+/// How long, at most, it waits out of reach of a tired fighter's flurry
+/// before stepping in to pick its punches, in seconds: longer at lower
+/// levels, which press less.
+const PICK_SECONDS: f64 = 1.5;
+/// When the punch it steps in with is thrown, in seconds after the step
+/// sets off: once the step is done (the engine's step takes 0.42 s), since
+/// a punch stacked on a step can tip a fighter over.
+const PICK_PUNCH_SECONDS: (f64, f64) = (0.45, 0.55);
+/// How much longer it waits between its own punches for each whole share of
+/// its own arms' strength lost: tired by a fifth, twice as long.
+const PACING: f64 = 5.0;
+
 /// How long a move it decided on may wait while it is busy (its own punch
 /// still out, a step under way, or still leaning or ducked) before it gives
 /// the move up, in seconds.
@@ -187,14 +239,19 @@ pub struct Sight {
     pub blocked: bool,
     /// The clean punch that landed on it went to its body.
     pub hit_body: bool,
+    /// How much of its arms' strength the other fighter has lost to tiring,
+    /// from 0 fresh, as the bar under its tag shows it.
+    pub their_tiredness: f64,
 }
 
-/// What the opponent knows of itself, at once: what it is doing, and
-/// whether there is room behind it in the ring for a step back.
+/// What the opponent knows of itself, at once: what it is doing, whether
+/// there is room behind it in the ring for a step back, and how much of its
+/// arms' strength it has lost to tiring, from 0 fresh.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Itself {
     pub doing: rp::Doing,
     pub room_behind: bool,
+    pub tiredness: f64,
 }
 
 /// What the opponent does on a step.
@@ -280,6 +337,15 @@ pub struct Opponent {
     /// and fading, and how much of that went to the body.
     pressure: f64,
     body_pressure: f64,
+    /// Seconds since the fight began, and when it saw each of the other
+    /// fighter's last punches set off, within `FLURRY_SECONDS`.
+    clock: f64,
+    punches_seen: VecDeque<f64>,
+    /// It is letting a fresh fighter punch itself out: it stays out of its
+    /// reach while the flurry lasts.
+    outlasting: bool,
+    /// When it may counter again, on `clock`.
+    next_counter: f64,
 }
 
 impl Opponent {
@@ -302,6 +368,10 @@ impl Opponent {
             guard_in: 0.0,
             pressure: 0.0,
             body_pressure: 0.0,
+            clock: 0.0,
+            punches_seen: VecDeque::new(),
+            outlasting: false,
+            next_counter: 0.0,
         };
         opponent.late = opponent.draw_late();
         opponent.attack_in = opponent.between(opponent.traits.attack_gap);
@@ -324,6 +394,9 @@ impl Opponent {
         self.crouch = 0.0;
         self.pressure = 0.0;
         self.body_pressure = 0.0;
+        self.punches_seen.clear();
+        self.outlasting = false;
+        self.next_counter = 0.0;
         self.attack_in = self.between(self.traits.attack_gap);
         self.guard_in = 0.0;
     }
@@ -338,6 +411,14 @@ impl Opponent {
         self.steps += 1;
         self.pressure = (self.pressure - dt / PRESSURE_SECONDS).max(0.0);
         self.body_pressure = (self.body_pressure - dt / PRESSURE_SECONDS).max(0.0);
+        self.clock += dt;
+        while self
+            .punches_seen
+            .front()
+            .is_some_and(|&at| self.clock - at > FLURRY_SECONDS)
+        {
+            self.punches_seen.pop_front();
+        }
         // Everything it has not taken in yet that is old enough to be seen.
         let newest = self.steps.saturating_sub(self.late);
         while self.taken < newest {
@@ -387,17 +468,35 @@ impl Opponent {
             if to_body {
                 self.body_pressure += 1.0;
             }
+            self.punches_seen.push_back(self.clock);
+        }
+        // A flurry over, there is nothing more to wait out.
+        if self.outlasting && !self.flurrying() {
+            self.outlasting = false;
         }
         // The other fighter dropping its level, as it does before a punch
         // to the body (and to duck under one).
         let dropped = now.them.ducking && !then.them.ducking;
+        // A fresh fighter throwing punch after punch: it weathers the storm,
+        // making room or covering up, and throws nothing into it; once the
+        // fighter has tired, it counters.
+        let storm = self.flurrying() && now.their_tiredness < TIRED;
         if now.hit && self.notices() {
-            self.hit_me(me, now.hit_body);
+            self.hit_me(me, now.hit_body, storm);
         } else if their_punch && in_reach && self.notices() {
-            // Too late for this punch: it punches back into the guard the
-            // punch opened, or covers up against the next, low against a
-            // punch to the body.
-            if !self.counter(now) && self.chance(self.traits.cover_up * 0.6) {
+            if storm && self.chance(self.traits.outlast) {
+                self.outlast(me, to_body);
+            } else if !storm && self.counter(now, me) {
+                // Too late for this punch: it punches back into the guard
+                // the punch opened.
+            } else if self.flurrying() {
+                // Behind its guard between counters while a flurry lasts.
+                if self.chance(self.traits.cover_up) {
+                    self.cover(to_body, 0.5, 0.9);
+                }
+            } else if self.chance(self.traits.cover_up * 0.6) {
+                // Or it covers up against the next, low against a punch to
+                // the body.
                 self.cover(to_body, 0.35, 0.6);
             }
         } else if dropped && in_reach && self.notices() && self.chance(self.traits.read_step * 0.5)
@@ -406,7 +505,7 @@ impl Opponent {
         } else if came_back && in_reach && self.notices() && self.chance(0.5) {
             // A punch it saw too late to answer as it came: one more chance
             // as it comes back.
-            self.counter(now);
+            self.counter(now, me);
         }
         if step_began(true) && self.notices() && self.chance(self.traits.read_step) {
             self.read_step_in(me);
@@ -421,16 +520,17 @@ impl Opponent {
     }
 
     /// It was hit clean, to the body or the head: it covers up where it
-    /// was hit, makes room, or fires back.
-    fn hit_me(&mut self, me: Itself, body: bool) {
+    /// was hit, makes room, or fires back; in a fresh fighter's `storm` of
+    /// punches it fires nothing back, and covers up instead.
+    fn hit_me(&mut self, me: Itself, body: bool, storm: bool) {
         let draw = self.unit();
-        let cover = self.traits.cover_up;
+        let cover = if storm { 0.8 } else { self.traits.cover_up };
         if draw < cover {
             self.cover(body, 0.5, 0.9);
         } else if draw < cover + 0.2 && me.room_behind {
             self.forget_plan();
             self.decide(0.0, Planned::Act(Act::StepOut));
-        } else if draw < cover + 0.35 {
+        } else if draw < cover + 0.35 && !storm {
             self.forget_plan();
             let punch = self.pick_punch();
             self.decide(0.0, Planned::Act(punch));
@@ -462,12 +562,20 @@ impl Opponent {
     /// The other fighter punched, opening its guard until the punch is
     /// back: it punches into the opening, letting go of its own guard to,
     /// at its level's chance. Whether it does.
-    fn counter(&mut self, now: Sight) -> bool {
+    fn counter(&mut self, now: Sight, me: Itself) -> bool {
+        if self.clock < self.next_counter {
+            return false;
+        }
         let chance = if now.them.guarded {
             self.traits.counter * 0.4
         } else {
             self.traits.counter
         };
+        // Less the more tired it is, and more against a tired fighter.
+        let chance = chance
+            * (1.0 - 2.0 * me.tiredness).max(0.3)
+            * (1.0 + 0.5 * self.traits.press * (now.their_tiredness / TIRED).min(1.0));
+        let chance = chance.min(0.95);
         if !self.chance(chance) {
             return false;
         }
@@ -479,7 +587,35 @@ impl Opponent {
         };
         let wait = self.between((0.0, 0.05));
         self.decide(wait, Planned::Act(punch));
+        self.next_counter = self.clock + self.between(self.traits.counter_gap);
         true
+    }
+
+    /// Whether the other fighter is throwing punch after punch: a flurry.
+    fn flurrying(&self) -> bool {
+        self.punches_seen.len() >= FLURRY_PUNCHES
+    }
+
+    /// It lets the fighter flurrying punch itself out: it steps back out of
+    /// its reach and stays out while the flurry lasts, or with no room
+    /// behind it covers up, low against punches to the body.
+    fn outlast(&mut self, me: Itself, low: bool) {
+        if me.room_behind {
+            self.forget_plan();
+            self.decide(0.0, Planned::Act(Act::StepOut));
+            self.outlasting = true;
+        } else {
+            self.cover(low, 0.6, 1.0);
+        }
+    }
+
+    /// How many times as long as its level's own it waits between its
+    /// punches: longer the more tired it is, as a boxer paces himself, and
+    /// shorter against a tired fighter, at its level's `press`.
+    fn pace(&self, me: Itself, seen: Sight) -> f64 {
+        let resting = 1.0 + PACING * me.tiredness;
+        let pressing = 1.0 - 0.5 * self.traits.press * (seen.their_tiredness / TIRED).min(1.0);
+        resting * pressing
     }
 
     /// Covers up behind its forearms, low over its body or high in front of
@@ -565,10 +701,30 @@ impl Opponent {
     /// own guard up for a while now and then, and makes room when crowded.
     fn on_its_own(&mut self, dt: f64, me: Itself) -> Option<Act> {
         let seen = self.last;
+        // Nothing seen yet, as a round begins, it does nothing: what it last
+        // saw is then empty, the fighters no distance apart, and it stepped
+        // back from that as from a fighter crowding it.
+        if self.taken == 0 {
+            return None;
+        }
         if me.doing.step.is_some() || me.doing.punch.is_some() {
             return None;
         }
         if seen.apart > REACH {
+            // Out of a flurry's reach, it waits for the flurry to end, or,
+            // once the fighter throwing it has tired, steps in now and then
+            // to pick its punches, at its level's `press`.
+            if self.outlasting {
+                let picks = seen.their_tiredness >= TIRED
+                    && self.chance(dt * self.traits.press / PICK_SECONDS);
+                if picks {
+                    // In with a punch, thrown once the step is done.
+                    let wait = self.between(PICK_PUNCH_SECONDS);
+                    let punch = self.pick_punch();
+                    self.decide(wait, Planned::Act(punch));
+                }
+                return picks.then_some(Act::StepIn);
+            }
             let they_come = seen.them.step.is_some_and(|step| step.forward);
             return (!they_come && self.chance(dt / 0.25)).then_some(Act::StepIn);
         }
@@ -589,7 +745,7 @@ impl Opponent {
         if self.attack_in > 0.0 {
             return None;
         }
-        self.attack_in = self.between(self.traits.attack_gap);
+        self.attack_in = self.between(self.traits.attack_gap) * self.pace(me, seen);
         // To the body about one punch in four, and mostly into a high guard,
         // which leaves the body open; from near enough, as a body punch from
         // a duck reaches less far than one at the head.
@@ -756,6 +912,7 @@ mod tests {
         let mut me = Itself {
             doing: rp::Doing::default(),
             room_behind: true,
+            tiredness: 0.0,
         };
         sights
             .iter()
@@ -777,6 +934,44 @@ mod tests {
 
     fn acts(wishes: &[Wish]) -> Vec<Act> {
         wishes.iter().filter_map(|wish| wish.act).collect()
+    }
+
+    /// The other fighter `apart`, throwing a jab every `every` seconds for
+    /// `seconds`, each out for a third of a second.
+    fn flurry(apart: f64, every: f64, seconds: f64) -> Vec<Sight> {
+        (0..(seconds / DT).round() as usize)
+            .map(|step| {
+                let age = (step as f64 * DT) % every;
+                if age < 0.33 {
+                    punching(apart, age)
+                } else {
+                    standing(apart)
+                }
+            })
+            .collect()
+    }
+
+    /// Against a fighter throwing punch after punch, the hard opponent
+    /// makes room out of its reach and lets it punch itself out, more
+    /// often than the easy one does.
+    #[test]
+    fn it_makes_room_against_a_flurry() {
+        let room = |level: Level| {
+            (1..=8)
+                .map(|seed| {
+                    let wishes = watch(level, seed, &flurry(0.62, 0.4, 6.0));
+                    acts(&wishes)
+                        .iter()
+                        .filter(|&&act| act == Act::StepOut)
+                        .count()
+                })
+                .sum::<usize>()
+        };
+        let (easy, hard) = (room(Level::Easy), room(Level::Hard));
+        assert!(
+            hard >= 6 && hard > easy,
+            "easy stepped out {easy} times, hard {hard}"
+        );
     }
 
     /// What it does follows from its seed: the same for the same seed, and

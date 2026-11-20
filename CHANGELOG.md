@@ -3,6 +3,13 @@
 Each version of the Fight page, newest first. The page shows the newest
 entry's lines as written.
 
+## v0.7 (2026-11-20)
+
+- Punching tires your arms. The bar under each fighter's name shows how much strength its arms have left: punch flat out and within seconds your punches come slower and softer and your hands come back to the guard later; rest, between punches and between rounds, and the strength comes back.
+- A punch counts only if it lands hard: a tired arm's punch, or one that only just reaches, no longer scores.
+- The opponent paces itself too, makes a fighter who throws punch after punch miss or punch into its guard, and goes after you once you are tired.
+- The opponent no longer steps back as a round begins.
+
 ## v0.6.1 (2026-11-19)
 
 - A punch that lands no longer shows the bone of the hand coming out through the knuckles for a moment: the fighters' bones stay inside their skin, and a fighter who falls keeps the flesh on its legs.

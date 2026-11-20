@@ -12,12 +12,36 @@
 //! does. Otherwise, when the last round ends, the fighter who landed more
 //! clean punches wins, as Olympic boxing's computer scoring counted them
 //! from 1992 to 2012: a punch counts that lands on the head or the body, not
-//! one stopped on the arms. Equal counts are a draw. What a punch struck is
-//! the engine's to say (`rp::World::landed_punches`), and whether a fighter
-//! is down (`rp::World::fighter_fallen`): the engine's fighters get up on
-//! their own.
+//! one stopped on the arms, and lands hard. Amateur boxing's rules count a
+//! blow only with the weight of the body or the shoulder behind it, and the
+//! counting machine was dropped in 2013 for rewarding light, quick touches;
+//! a fighter's arms tire as it punches (the engine's `fatigue.rs`), and a
+//! tired arm's punch, landing slower than `counting_speed` says, does not
+//! count, nor one that just reaches from the end of the arm's way.
+//! Equal counts are a draw. What a punch struck, and how fast, is the
+//! engine's to say (`rp::World::landed_punches`), and whether a fighter is
+//! down (`rp::World::fighter_fallen`): the engine's fighters get up on their
+//! own.
 
 use realistic_physics as rp;
+
+/// The slowest a clean jab and a clean cross may land and still count, in
+/// metres a second: nine tenths of the slowest a fresh fighter's lands from
+/// within its reach. Over the engine's 46 distances (`print_fighter_punches`)
+/// fresh jabs landed at 7.6 to 8.8 m/s and crosses at 8.0 to 8.6, and both
+/// at 5.0 to 5.6 thrown from the end of their reach, the arm all but
+/// straight; a tired arm's punch lands slower by the square root of the
+/// strength it has left (the engine's `Strike::pace`), under these once it
+/// has lost about a fifth.
+pub const COUNTING_SPEED: [f64; 2] = [6.9, 7.2];
+
+/// The slowest a clean punch of `kind` may land and still count.
+pub fn counting_speed(kind: rp::PunchKind) -> f64 {
+    match kind {
+        rp::PunchKind::Jab => COUNTING_SPEED[0],
+        rp::PunchKind::Cross => COUNTING_SPEED[1],
+    }
+}
 
 /// How many seconds after a clean punch lands a fighter going down counts
 /// as knocked down by it, rather than slipping: a knocked-out fighter is on
@@ -221,6 +245,9 @@ impl Bout {
             if let Some(since) = self.hit.get_mut(punch.on) {
                 *since = Some(0.0);
             }
+            if !counts(punch) {
+                continue;
+            }
             if let (Stage::Round(_), Some(tally)) = (self.stage, self.clean.last_mut()) {
                 if let Some(count) = tally.get_mut(punch.by) {
                     *count += 1;
@@ -302,10 +329,16 @@ impl Bout {
     }
 }
 
-/// Whether a punch that struck `struck` counts: on the head or the body,
-/// not stopped on the arms (nor, as never happens, on a leg).
+/// Whether a punch that struck `struck` landed clean: on the head or the
+/// body, not stopped on the arms (nor, as never happens, on a leg).
 pub fn clean(struck: rp::Struck) -> bool {
     matches!(struck, rp::Struck::Head | rp::Struck::Body)
+}
+
+/// Whether a landed punch counts toward the decision: clean, and hard, its
+/// fist landing at its kind's `counting_speed` or faster.
+pub fn counts(punch: &rp::LandedPunch) -> bool {
+    clean(punch.struck) && punch.speed >= counting_speed(punch.kind)
 }
 
 #[cfg(test)]
@@ -374,6 +407,27 @@ mod tests {
             bout.outcome().map(|(outcome, _)| outcome),
             Some(Outcome::Decision { winner: Some(0) })
         );
+    }
+
+    /// A clean punch landing slower than a fresh arm's, as a tired arm's
+    /// does, does not count; it still makes a fall just after it a
+    /// knockdown.
+    #[test]
+    fn a_slow_punch_does_not_count() {
+        let mut bout = Bout::new(Rules::default());
+        let mut slow = punch(0, rp::Struck::Head);
+        slow.speed = counting_speed(slow.kind) - 0.5;
+        play(&mut bout, 1.0, &[slow, punch(1, rp::Struck::Head)]);
+        assert_eq!(bout.clean(), [0, 1]);
+        let mut slow = punch(1, rp::Struck::Head);
+        slow.speed = counting_speed(slow.kind) - 0.5;
+        let bells = (0..3)
+            .filter_map(|step| {
+                let landed = if step == 0 { vec![slow] } else { vec![] };
+                bout.tick(DT, &landed, [step > 0, false])
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(bells, [Bell::Knockdown(0)]);
     }
 
     /// Nothing counts during the rest between rounds, and equal counts at

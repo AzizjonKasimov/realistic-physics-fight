@@ -668,18 +668,26 @@ fn draw_round(game: &Game, layout: &Layout, palette: &Palette) {
 const TAG_HEIGHT: f32 = 24.0;
 const TAG_GAP: f32 = 6.0;
 
-/// A tag over a fighter's head, where it is drawn.
+/// A tag over a fighter's head, where it is drawn, and how much strength
+/// the fighter's arms have left, from 1 fresh down.
 struct Tag {
     text: &'static str,
     accent: Color,
     x: f32,
     y: f32,
     w: f32,
+    stamina: f32,
 }
 
-/// A tag over each fighter's head: who plays it. Over two fighters
-/// standing close, as on a phone where they are drawn small, the two tags
-/// would overlap: each moves aside by half as much as they would.
+/// The height of the stamina bar under a tag, and the room between them.
+const STAMINA_HEIGHT: f32 = 5.0;
+const STAMINA_GAP: f32 = 3.0;
+
+/// A tag over each fighter's head: who plays it, and under it a bar of how
+/// much strength the fighter's arms have left, which punching flat out
+/// wears down and resting brings back (the engine's `fatigue.rs`). Over two
+/// fighters standing close, as on a phone where they are drawn small, the
+/// two tags would overlap: each moves aside by half as much as they would.
 fn draw_tags(game: &Game, view: rp::View, palette: &Palette) {
     let size = 16.0;
     let mut tags: Vec<Tag> = Vec::new();
@@ -694,12 +702,17 @@ fn draw_tags(game: &Game, view: rp::View, palette: &Palette) {
             _ => ("OPPONENT", OPPONENT),
         };
         let w = measure_text(text, None, size as u16, 1.0).width + 18.0;
+        let stamina = game
+            .world
+            .fighter_stamina(fighter)
+            .map_or(1.0, |stamina| stamina.both()) as f32;
         tags.push(Tag {
             text,
             accent,
             x: at.x as f32 - w * 0.5,
-            y: at.y as f32 - TAG_HEIGHT - 10.0,
+            y: at.y as f32 - TAG_HEIGHT - STAMINA_GAP - STAMINA_HEIGHT - 10.0,
             w,
+            stamina,
         });
     }
     if let [a, b] = &mut tags[..] {
@@ -720,6 +733,16 @@ fn draw_tags(game: &Game, view: rp::View, palette: &Palette) {
             size,
             tag.accent,
         );
+        let bar_y = tag.y + TAG_HEIGHT + STAMINA_GAP;
+        draw_rectangle(tag.x, bar_y, tag.w, STAMINA_HEIGHT, palette.hud_back);
+        draw_rectangle(
+            tag.x,
+            bar_y,
+            tag.w * tag.stamina.clamp(0.0, 1.0),
+            STAMINA_HEIGHT,
+            tag.accent,
+        );
+        draw_rectangle_lines(tag.x, bar_y, tag.w, STAMINA_HEIGHT, 1.0, palette.hud_border);
     }
 }
 

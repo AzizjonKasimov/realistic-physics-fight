@@ -322,7 +322,16 @@ impl Game {
             hit_body: landed
                 .iter()
                 .any(|punch| punch.on == RIGHT && punch.struck == rp::Struck::Body),
+            their_tiredness: self.tiredness(LEFT),
         }
+    }
+
+    /// How much of `fighter`'s arms' strength it has lost to tiring, from 0
+    /// fresh: what the bar under its tag shows (the engine's `fatigue.rs`).
+    pub fn tiredness(&self, fighter: usize) -> f64 {
+        self.world
+            .fighter_stamina(fighter)
+            .map_or(0.0, |stamina| 1.0 - stamina.both())
     }
 
     /// Between rounds both fighters go back to their corners, a step at a
@@ -398,6 +407,7 @@ impl Game {
                 let me = Itself {
                     doing: self.world.fighter_doing(RIGHT).unwrap_or_default(),
                     room_behind: self.room_behind(RIGHT),
+                    tiredness: self.tiredness(RIGHT),
                 };
                 let wish = self.opponent.tick(dt, self.sight(), me);
                 self.holds[RIGHT] = wish.holds;
